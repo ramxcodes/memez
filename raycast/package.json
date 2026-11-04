@@ -1,0 +1,47 @@
+{
+  "$schema": "https://www.raycast.com/schemas/extension.json",
+  "name": "memez",
+  "title": "Memez",
+  "description": "Search your Memez library and paste a meme into the app in front",
+  "icon": "icon.png",
+  "author": "ramxcodes",
+  "categories": [
+    "Media"
+  ],
+  "license": "MIT",
+  "commands": [
+    {
+      "name": "search-memes",
+      "title": "Search Memes",
+      "description": "Find a meme by title, tags or text in the image, then paste or copy it",
+      "mode": "view"
+    },
+    {
+      "name": "add-meme",
+      "title": "Add Meme from Clipboard",
+      "description": "Add the image, GIF, video or link on the clipboard to Memez",
+      "mode": "no-view"
+    }
+  ],
+  "preferences": [
+    {
+      "name": "libraryFolder",
+      "title": "Library Folder",
+      "description": "The Memez library folder (the one with library.json)",
+      "type": "textfield",
+      "required": false,
+      "default": "~/Memez"
+    }
+  ],
+  "scripts": {
+    "dev": "ray develop",
+    "build": "ray build"
+  },
+  "dependencies": {
+    "@raycast/api": "^2.10.1",
+    "@raycast/utils": "^2.3.3"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  }
+}

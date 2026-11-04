@@ -1,0 +1,41 @@
+appId: com.ramxcodes.memez
+productName: Memez
+directories:
+  buildResources: build
+files:
+  - '!**/.vscode/*'
+  - '!src/*'
+  - '!.graph/*'
+  - '!raycast/**'
+  - '!electron.vite.config.{js,ts,mjs,cjs}'
+  - '!vitest.config.{js,ts,mjs,cjs,mts}'
+  - '!{.eslintcache,eslint.config.mjs,.prettierignore,.prettierrc.yaml,dev-app-update.yml,CHANGELOG.md,README.md}'
+  - '!{.env,.env.*,.npmrc,pnpm-lock.yaml}'
+  - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
+  # Keep the app small: the AI models download on first launch, and only the macOS
+  # ONNX runtime is needed. transformers.js bundles its own web runtime.
+  - '!node_modules/onnxruntime-node/bin/napi-v6/{linux,win32}/**'
+  - '!node_modules/onnxruntime-web/**'
+  - '!node_modules/@img/*-{linux,linuxmusl,win32}-*/**'
+  # Same library twice (npm has no symlinks); the binding loads libonnxruntime.1.dylib.
+  - '!node_modules/onnxruntime-node/bin/napi-v6/darwin/*/libonnxruntime.1.*.*.dylib'
+asarUnpack:
+  - resources/**
+  # Native AI runtime and image decoder. They load .node and .dylib files from disk.
+  - node_modules/onnxruntime-node/**
+  - node_modules/sharp/**
+  - node_modules/@img/**
+  - node_modules/@napi-rs/**
+# Raycast sends memez:// links (see src/main/links.ts).
+protocols:
+  - name: Memez
+    schemes:
+      - memez
+mac:
+  target:
+    - dir
+  category: public.app-category.utilities
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  notarize: false
+npmRebuild: false
