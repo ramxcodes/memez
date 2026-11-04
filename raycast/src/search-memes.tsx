@@ -1,4 +1,4 @@
-import { Action, ActionPanel, getPreferenceValues, Grid, Icon } from '@raycast/api'
+import { Action, ActionPanel, environment, getPreferenceValues, Grid, Icon } from '@raycast/api'
 import { showFailureToast, usePromise } from '@raycast/utils'
 import { watch } from 'node:fs'
 import { homedir } from 'node:os'
@@ -9,12 +9,15 @@ import { byRecentUse, createSearch } from '../../src/renderer/src/lib/search'
 import { mediaFileName, mediaKind, type Meme } from '../../src/shared/types'
 import { addFromClipboard, markUsed } from './memez'
 import { pageAfter } from './page'
+import { videoPoster } from './poster'
 
 // The library folder from the extension preferences. `~` means the home folder.
 const root = getPreferenceValues<Preferences.SearchMemes>().libraryFolder.replace(
   /^~(?=$|\/)/,
   homedir()
 )
+// Video first frames live in the extension's own folder: the extension never writes to the library.
+const posterDir = join(environment.supportPath, 'posters')
 
 /** Ranks memes like the popup: recent first before typing, then fuzzy search. */
 async function rankedMemes(query: string): Promise<Meme[]> {
@@ -104,6 +107,15 @@ function AddAction() {
 
 function MemeItem({ meme }: { meme: Meme }) {
   const path = join(root, 'media', mediaFileName(meme))
+  const isVideo = mediaKind(meme.ext) === 'video'
+  // Quick Look cannot read WebM: those tiles keep the file icon and have no Quick Look.
+  const isWebm = meme.ext === 'webm'
+  // Raycast cannot play videos, so an MP4 tile shows its first frame (the file icon until it loads).
+  const { data: poster } = usePromise(videoPoster, [path, posterDir], {
+    execute: meme.ext === 'mp4',
+    failureToastOptions: { title: 'Could not show a video frame' }
+  })
+  const image = isVideo ? poster : path
   // Best effort: the paste already worked, so only say so when recent order cannot update.
   const used = () =>
     void markUsed(meme.id).catch((error) =>
@@ -111,14 +123,16 @@ function MemeItem({ meme }: { meme: Meme }) {
     )
   return (
     <Grid.Item
-      // Raycast cannot play videos, so they show the file icon.
-      content={mediaKind(meme.ext) === 'video' ? { fileIcon: path } : { source: path }}
+      content={image ? { source: image } : { fileIcon: path }}
       title={meme.title}
       subtitle={meme.tags.join(' ')}
+      quickLook={isWebm ? undefined : { path, name: meme.title }}
       actions={
         <ActionPanel>
           <Action.Paste title="Paste Meme" content={{ file: path }} onPaste={used} />
           <Action.CopyToClipboard title="Copy Meme" content={{ file: path }} onCopy={used} />
+          {/* ⌘Y plays an MP4, or shows an image large, in macOS Quick Look. */}
+          {!isWebm && <Action.ToggleQuickLook shortcut={{ modifiers: ['cmd'], key: 'y' }} />}
           <AddAction />
           <Action.ShowInFinder path={path} shortcut={{ modifiers: ['cmd', 'shift'], key: 'f' }} />
           <Action.CopyToClipboard
