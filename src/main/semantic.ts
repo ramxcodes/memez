@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises'
-import { modelInfo, type ModelId, type ModelRole } from '../shared/models'
+import type { ModelId, ModelRole } from '../shared/models'
+import { startAiProcess } from './aiProcess'
 import { writeAtomic } from './library'
 const UNLOAD_AFTER_MS = 5 * 60_000
 
@@ -98,7 +99,7 @@ export function rankSimilar(
 /**
  * Search by meaning: "crying" finds a crying cat with no such tag or title.
  * Best effort: before the models are downloaded, or on any failure, it finds nothing.
- * The text model loads on first use and unloads after a quiet time.
+ * The text model loads on first use, in its own process, and the process ends after a quiet time.
  * `isEnabled` is the user's "Local AI" setting; when it is off, it finds nothing.
  */
 export function createSemanticSearch(
@@ -107,24 +108,17 @@ export function createSemanticSearch(
   isEnabled: () => boolean,
   activeModels: () => Record<ModelRole, ModelId>
 ) {
-  // The CLIP text model for queries. Its files come with the tag model's download (see autotag).
-  const loadTextModel = async (id: ModelId) => {
-    const { repo, dtype } = modelInfo(id)
-    const ai = await import('@huggingface/transformers')
-    ai.env.cacheDir = cacheDir
-    // Never download here: the auto tagger owns the download and shows its progress.
-    const options = { local_files_only: true }
-    const [tokenizer, model] = await Promise.all([
-      ai.AutoTokenizer.from_pretrained(repo, options),
-      ai.CLIPTextModelWithProjection.from_pretrained(repo, { ...options, dtype })
-    ])
-    return {
-      async embed(text: string): Promise<number[]> {
-        const { text_embeds } = await model(tokenizer([text], { truncation: true }))
-        return (text_embeds.normalize(2, -1).tolist() as number[][])[0]
-      },
-      dispose: () => model.dispose()
-    }
+  // The CLIP text model for queries, in its own AI process (see aiProcess.ts). It never
+  // downloads, so there is no progress. `onCrash` runs when the process crashes.
+  const loadTextModel = (id: ModelId, onCrash: () => void) => {
+    const ai = startAiProcess(() => undefined, onCrash)
+    return ai.call('loadTextModel', cacheDir, id).then(
+      () => ({ embed: (text: string) => ai.call('embedText', text), dispose: ai.stop }),
+      (error: unknown) => {
+        ai.stop()
+        throw error
+      }
+    )
   }
 
   let textModel: ReturnType<typeof loadTextModel> | null = null
@@ -145,11 +139,19 @@ export function createSemanticSearch(
     clearTimeout(unloadTimer)
     unloadTimer = setTimeout(() => void unload(), UNLOAD_AFTER_MS)
     textModelId = id
-    textModel ??= loadTextModel(id).catch((error: unknown) => {
-      textModel = null
-      throw error
-    })
-    return textModel
+    if (textModel) return textModel
+    // After a failed load or a crash, the next search loads it again.
+    const forget = (): void => {
+      if (textModel === loading) textModel = null
+    }
+    const loading: ReturnType<typeof loadTextModel> = loadTextModel(id, forget).catch(
+      (error: unknown) => {
+        forget()
+        throw error
+      }
+    )
+    textModel = loading
+    return loading
   }
 
   return {

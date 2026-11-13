@@ -2,7 +2,7 @@ import { access, readdir, readFile, rm, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { MODELS, modelInfo, type ModelId, type ModelInfo } from '../shared/models'
 import type { ModelDownload, ModelState } from '../shared/types'
-import { sumProgress } from './autotag'
+import { sumProgress } from './aiModels'
 import type { Handlers, MainContext } from './ipc'
 import { rankSimilar } from './semantic'
 

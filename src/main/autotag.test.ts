@@ -1,62 +1,80 @@
-import { describe, expect, it } from 'vitest'
-import type { ProgressInfo } from '@huggingface/transformers'
-import { pickTags, sumProgress, TAG_WORDS, titleFromCaption } from './autotag'
+import { mkdtemp } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { describe, expect, it, vi } from 'vitest'
+import { DEFAULT_MODELS } from '../shared/models'
+import type { AutoTagStatus } from '../shared/types'
+import { AiCrashError, startAiProcess } from './aiProcess'
+import { createAutoTagger } from './autotag'
+import { openLibrary } from './library'
+import { openVectors } from './semantic'
 
-/** Scores with `word: score` set and every other word at 0. */
-const scores = (set: Record<string, number>): number[] => TAG_WORDS.map((word) => set[word] ?? 0)
+vi.mock('./aiProcess', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./aiProcess')>()),
+  startAiProcess: vi.fn()
+}))
 
-describe('titleFromCaption', () => {
-  it('drops the leading article and the final period', () => {
-    expect(titleFromCaption('A cartoon of a dog with a caption.')).toBe(
-      'Cartoon of a dog with a caption'
-    )
-    expect(titleFromCaption('  an old man waving  ')).toBe('Old man waving')
+/**
+ * A fake AI process for each start. Each `read` takes the next outcome: `crash` ends the process
+ * the way a native crash does (open calls reject, `onCrash` runs).
+ */
+function fakeAi(outcomes: ('ok' | 'crash')[]): { started: () => number } {
+  let started = 0
+  vi.mocked(startAiProcess).mockImplementation((_onProgress, onCrash) => {
+    started++
+    const call = async (method: string): Promise<unknown> => {
+      if (method !== 'read') return undefined
+      if (outcomes.shift() === 'crash') {
+        const crash = new AiCrashError('The AI stopped unexpectedly (exit code 11).')
+        onCrash(crash)
+        throw crash
+      }
+      return { vector: [1, 0], suggestion: { title: 'Cat', tags: ['cat'] } }
+    }
+    return { call, stop: () => undefined } as ReturnType<typeof startAiProcess>
   })
-})
+  return { started: () => started }
+}
 
-describe('pickTags', () => {
-  it('keeps model words above the cut-off, best first, at most four', () => {
-    const tags = pickTags(
-      scores({ drake: 0.5, choice: 0.2, fire: 0.1, smug: 0.09, sad: 0.08, cat: 0.06 }),
-      ''
-    )
-    expect(tags).toEqual(['drake', 'choice', 'fire', 'smug'])
+/** Runs the tagger on three new memes and waits until the queue is empty. */
+async function tagThree() {
+  const root = await mkdtemp(join(tmpdir(), 'memez-'))
+  const library = await openLibrary(root)
+  for (const seed of [1, 2, 3]) await library.add(new Uint8Array([0x89, 0x50, 0x4e, 0x47, seed]))
+  const vectors = await openVectors(join(root, 'vectors.json'))
+  let status: AutoTagStatus | undefined
+  const tagger = createAutoTagger(
+    library,
+    vectors,
+    root,
+    () => true,
+    () => DEFAULT_MODELS,
+    (next) => (status = next),
+    () => undefined
+  )
+  tagger.start()
+  await vi.waitFor(() => expect(tagger.busy() || status?.pending.length).toBeFalsy())
+  const tagged = library.list().filter((meme) => meme.autoTagged).length
+  return { tagged, status }
+}
+
+describe('createAutoTagger when the AI process crashes', () => {
+  it('skips the meme, and the next meme starts a new process', async () => {
+    const ai = fakeAi(['crash', 'ok', 'ok'])
+    const { tagged, status } = await tagThree()
+    expect(tagged).toBe(2)
+    expect(ai.started()).toBe(2)
+    expect(status?.model).toEqual({ state: 'ready' })
   })
 
-  it('adds list words named in the caption, plural or not', () => {
-    const tags = pickTags(scores({}), 'Two women are making funny faces with cats. Thumbs up!')
-    expect(tags).toEqual(['cat', 'woman', 'thumbs up'])
-  })
-
-  it('does not match a word inside another word', () => {
-    expect(pickTags(scores({}), 'A scattered carpet')).toEqual([])
-  })
-})
-
-describe('sumProgress', () => {
-  const progress = (file: string, loaded: number, total: number): ProgressInfo => ({
-    status: 'progress',
-    name: 'repo',
-    file,
-    loaded,
-    total,
-    progress: (loaded / total) * 100
-  })
-
-  // The bug: the first small file finished and the 830 MB download read 100%.
-  it('does not read 100% when only the first small file is done', () => {
-    const seen: number[] = []
-    const report = sumProgress((fraction) => seen.push(fraction), 1000)
-    report(progress('config.json', 10, 10))
-    expect(Math.max(...seen)).toBeCloseTo(0.01)
-    report(progress('model.onnx', 500, 990))
-    expect(seen.at(-1)).toBeCloseTo(0.51)
-  })
-
-  it('uses the real total when it is larger than expected', () => {
-    const seen: number[] = []
-    const report = sumProgress((fraction) => seen.push(fraction), 100)
-    report(progress('model.onnx', 100, 400))
-    expect(seen.at(-1)).toBe(0.25)
+  it('stops the queue after two crashes in a row, and shows the error', async () => {
+    const ai = fakeAi(['crash', 'crash', 'ok'])
+    const { tagged, status } = await tagThree()
+    expect(tagged).toBe(0)
+    expect(ai.started()).toBe(2) // No new process for the third meme.
+    expect(status?.model).toEqual({
+      state: 'failed',
+      message: 'The AI stopped unexpectedly (exit code 11).'
+    })
   })
 })
