@@ -1,0 +1,43 @@
+name: release
+
+# Push a tag like v1.2.3 (the same version as in package.json). Each system builds its own app,
+# and all of them go to one GitHub release.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            script: build:mac
+            files: dist/*.zip
+          - os: ubuntu-latest
+            script: build:linux
+            files: dist/*.AppImage
+          - os: windows-latest
+            script: build:win
+            files: dist/*.exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      # Only the macOS app carries the Raycast extension.
+      - if: runner.os == 'macOS'
+        run: npm --prefix raycast ci
+      - run: npm run ${{ matrix.script }} -- --publish never
+      - uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: ${{ matrix.files }}

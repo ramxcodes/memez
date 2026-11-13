@@ -1,7 +1,13 @@
 {
   "name": "memez",
   "version": "1.0.0",
-  "description": "Local meme library with a hotkey search popup",
+  "description": "Local meme library with a hotkey search popup and on-device AI tags",
+  "license": "MIT",
+  "homepage": "https://github.com/ramxcodes/memez",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ramxcodes/memez.git"
+  },
   "main": "./out/main/index.js",
   "author": "ramxcodes",
   "scripts": {
@@ -17,7 +23,9 @@
     "postinstall": "install-electron && electron-builder install-app-deps",
     "build:unpack": "npm run build && electron-builder --dir",
     "build:raycast": "npm --prefix raycast run build -- -o ../resources/raycast",
-    "build:mac": "npm run build && npm run build:raycast && electron-builder --mac"
+    "build:mac": "npm run build && npm run build:raycast && electron-builder --mac",
+    "build:linux": "npm run build && electron-builder --linux",
+    "build:win": "npm run build && electron-builder --win"
   },
   "dependencies": {
     "@electron-toolkit/utils": "^4.0.0",

@@ -3,8 +3,12 @@ productName: Memez
 directories:
   buildResources: build
 files:
+  # Everything, then what to leave out. The list has patterns that add files, so the builder
+  # no longer adds this one by itself.
+  - '**/*'
   - '!**/.vscode/*'
-  - '!src/*'
+  - '!src/**'
+  - '!docs/**'
   - '!.graph/**'
   # Local test files (screenshots, test libraries, logs). Never ship them; a log written
   # during the build also changes size while it is packed and breaks app.asar.
@@ -15,11 +19,17 @@ files:
   - '!{.eslintcache,eslint.config.mjs,.prettierignore,.prettierrc.yaml,dev-app-update.yml,CHANGELOG.md,README.md}'
   - '!{.env,.env.*,.npmrc,pnpm-lock.yaml}'
   - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
-  # Keep the app small: the AI models download on first launch, and only the macOS
-  # ONNX runtime is needed. transformers.js bundles its own web runtime.
-  - '!node_modules/onnxruntime-node/bin/napi-v6/{linux,win32}/**'
+  # transformers.js bundles its own web runtime.
   - '!node_modules/onnxruntime-web/**'
-  - '!node_modules/@img/*-{linux,linuxmusl,win32}-*/**'
+  # Keep each app small: the AI models download on first launch, and each build gets only the
+  # ONNX runtime and the image decoder of its own system. A later pattern wins.
+  - '!node_modules/onnxruntime-node/bin/napi-v6/**'
+  - 'node_modules/onnxruntime-node/bin/napi-v6/${platform}/${arch}/**'
+  - '!node_modules/@img/sharp-*/**'
+  - 'node_modules/@img/sharp-${platform}-${arch}/**'
+  - 'node_modules/@img/sharp-libvips-${platform}-${arch}/**'
+  # The app runs the models on the CPU. The Linux GPU providers are about 270 MB.
+  - '!node_modules/onnxruntime-node/bin/napi-v6/linux/*/libonnxruntime_providers_{cuda,tensorrt}.so'
   # Same library twice (npm has no symlinks); the binding loads libonnxruntime.1.dylib.
   - '!node_modules/onnxruntime-node/bin/napi-v6/darwin/*/libonnxruntime.1.*.*.dylib'
 asarUnpack:
@@ -34,11 +44,19 @@ protocols:
   - name: Memez
     schemes:
       - memez
+artifactName: ${productName}-${version}-${os}-${arch}.${ext}
 mac:
   target:
-    - dir
+    - zip
   category: public.app-category.utilities
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.plist
   notarize: false
+linux:
+  target:
+    - AppImage
+  category: Utility
+win:
+  target:
+    - nsis
 npmRebuild: false
