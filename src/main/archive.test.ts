@@ -1,7 +1,7 @@
 import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { strToU8, zipSync } from 'fflate'
+import { strToU8, unzipSync, zipSync } from 'fflate'
 import { describe, expect, it } from 'vitest'
 import { exportZip, importZip } from './archive'
 import { openLibrary } from './library'
@@ -30,6 +30,29 @@ describe('zip export and import', () => {
         autoTagged: true
       })
     ])
+  })
+
+  it('keeps who wrote each title, and drops an unknown source', async () => {
+    const source = await newLibrary()
+    const ai = (await source.add(png(1))).meme
+    const typed = (await source.add(png(2))).meme
+    await source.applyAutoTags(ai.id, { title: 'Cat on a table', tags: [] })
+    await source.update(typed.id, { title: 'mine' })
+    const memes = [
+      ...source.list(),
+      { id: 'a'.repeat(16), ext: 'png', title: 'odd', tags: [], titleSource: 'robot' }
+    ]
+    const zip = zipSync({
+      ...unzipSync(await exportZip(source)),
+      'library.json': strToU8(JSON.stringify({ version: 1, memes })),
+      [`media/${'a'.repeat(16)}.png`]: png(3)
+    })
+
+    const target = await newLibrary()
+    await importZip(target, zip)
+
+    const sources = Object.fromEntries(target.list().map((m) => [m.title, m.titleSource]))
+    expect(sources).toEqual({ 'Cat on a table': 'ai', mine: 'user', odd: undefined })
   })
 
   it('merges tags into memes that already exist', async () => {

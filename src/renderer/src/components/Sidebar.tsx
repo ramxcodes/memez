@@ -1,62 +1,102 @@
-import { Download, Film, Hash, ImagePlay, Images, LayoutGrid, Settings, Upload } from 'lucide-react'
+import { ChevronDown, ChevronUp, CircleMinus, Clock, Images, Settings, Tag } from 'lucide-react'
 import { useMemo, useState, type ReactNode } from 'react'
-import type { Meme } from '../../../shared/types'
-import { KIND_LABELS, matchesFilter, type Filter } from '../lib/filter'
-import { useAutoTagStatus } from '../lib/hooks'
+import type { AutoTagStatus, Meme } from '../../../shared/types'
+import { shortcutText } from '../lib/accelerator'
+import type { Scope } from '../lib/filter'
 import { AutoTagNote } from './AutoTagNote'
-import { HotkeyButton } from './HotkeyButton'
+import { Pill } from './ui'
 
 interface Props {
   memes: Meme[]
-  filter: Filter
-  onFilter: (filter: Filter) => void
-  onImport: () => void
-  onExport: () => void
+  scope: Scope
+  onScope: (scope: Scope) => void
+  autoTag: AutoTagStatus
   onError: (error: unknown) => void
 }
 
-const KINDS = [
-  { kind: 'all', Icon: LayoutGrid },
-  { kind: 'image', Icon: Images },
-  { kind: 'gif', Icon: ImagePlay },
-  { kind: 'video', Icon: Film }
-] as const
+const ROW = 'flex h-7 w-full items-center gap-[9px] rounded-[7px] px-2.5 text-left outline-none'
 
+/** One source-list row. The active row gets the soft highlight. */
 function Item(props: {
   icon: ReactNode
   label: string
   count?: number
-  active?: boolean
+  active: boolean
   onClick: () => void
 }) {
   return (
     <button
       onClick={props.onClick}
-      className={`flex h-7 w-full items-center gap-2 rounded-md px-2 text-left ${
-        props.active ? 'bg-control-strong' : 'hover:bg-control'
+      aria-current={props.active}
+      className={`${ROW} focus-visible:ring-2 focus-visible:ring-accent/60 ${
+        props.active ? 'bg-surface-3' : 'hover:bg-surface-2/70'
       }`}
     >
-      <span className={props.active ? 'text-accent' : 'text-secondary'}>{props.icon}</span>
+      {props.icon}
       <span className="flex-1 truncate" title={props.label}>
         {props.label}
       </span>
       {props.count !== undefined && (
-        <span className="text-[12px] text-tertiary tabular-nums">{props.count}</span>
+        <span className="text-[12px] text-ash tabular-nums">{props.count}</span>
       )}
     </button>
   )
 }
 
+/**
+ * A tag row in edit mode: an inline rename field and a remove button.
+ * `onRename` rejects when the rename fails; the field then shows the current name again.
+ */
+function EditTagRow(props: {
+  tag: string
+  count: number
+  onRename: (to: string) => Promise<void>
+  onDelete: () => void
+}) {
+  const [text, setText] = useState(props.tag)
+
+  const commit = (): void => {
+    const to = text.trim()
+    if (to && to !== props.tag) props.onRename(to).catch(() => setText(props.tag))
+    else setText(props.tag)
+  }
+
+  return (
+    <div className={ROW}>
+      <Tag size={14} className="shrink-0 text-ash" />
+      <input
+        value={text}
+        aria-label={`Rename ${props.tag}`}
+        onChange={(event) => setText(event.target.value.replace(/,/g, ''))}
+        onBlur={commit}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter') event.currentTarget.blur()
+          else if (event.key === 'Escape') setText(props.tag)
+        }}
+        className="h-6 min-w-0 flex-1 rounded-[5px] bg-control px-1.5 shadow-[inset_0_0_0_1px_var(--hairline-strong)] outline-none focus:shadow-[inset_0_0_0_1px_var(--accent)]"
+      />
+      <button
+        aria-label={`Remove ${props.tag} from ${props.count} memes`}
+        title="Remove tag"
+        onClick={props.onDelete}
+        className="shrink-0 rounded-full text-danger outline-none hover:brightness-110 focus-visible:ring-2 focus-visible:ring-accent/60"
+      >
+        <CircleMinus size={15} />
+      </button>
+    </div>
+  )
+}
+
 const Heading = ({ children }: { children: ReactNode }) => (
-  <h2 className="mt-5 mb-1 flex items-center justify-between px-2 text-[11px] font-semibold text-tertiary">
+  <h2 className="flex items-center justify-between px-2.5 pt-3.5 pb-[5px] text-[11px] font-semibold text-ash first:pt-0.5">
     {children}
   </h2>
 )
 
-const TAG_PREVIEW = 8
+const TAG_PREVIEW = 9
 
-/** Left column: media kinds, tags, AI status, hotkey and import/export. */
-export function Sidebar({ memes, filter, onFilter, onImport, onExport, onError }: Props) {
+/** Left source list: library scopes, tags (with rename and remove), AI status and Settings. */
+export function Sidebar({ memes, scope, onScope, autoTag, onError }: Props) {
   // Tags sorted by how many memes use them.
   const tags = useMemo(() => {
     const counts = new Map<string, number>()
@@ -64,78 +104,120 @@ export function Sidebar({ memes, filter, onFilter, onImport, onExport, onError }
     return [...counts].sort(([a, x], [b, y]) => y - x || a.localeCompare(b))
   }, [memes])
   const [showAllTags, setShowAllTags] = useState(false)
-  const autoTag = useAutoTagStatus()
+  const [editing, setEditing] = useState(false)
+  const isActiveTag = (tag: string): boolean => scope.by === 'tag' && scope.tag === tag
   // Keep the active tag visible even when it is not in the top few.
   const visibleTags = showAllTags
     ? tags
-    : tags.filter(([tag], index) => index < TAG_PREVIEW || filter === `tag:${tag}`)
+    : tags.filter(([tag], index) => index < TAG_PREVIEW || isActiveTag(tag))
+  const hiddenCount = tags.length - visibleTags.length
 
+  // A rename into an existing tag merges them (the main process does that).
+  // It shows the error, then rejects so the row can put the old name back.
+  const rename = (from: string, to: string): Promise<void> =>
+    window.api.renameTag(from, to).then(
+      () => {
+        if (isActiveTag(from)) onScope({ by: 'tag', tag: to })
+      },
+      (error: unknown) => {
+        onError(error)
+        throw error
+      }
+    )
+
+  const remove = (tag: string, count: number): void => {
+    const memesText = count === 1 ? '1 meme' : `${count} memes`
+    if (!confirm(`Remove the tag “${tag}” from ${memesText}? The memes stay in your library.`))
+      return
+    window.api.deleteTag(tag).then(() => {
+      if (isActiveTag(tag)) onScope({ by: 'all' })
+    }, onError)
+  }
+
+  const libraryIcon = 'shrink-0 text-accent'
   return (
-    <nav className="flex w-[228px] shrink-0 flex-col border-r border-separator bg-sidebar">
+    <nav className="flex w-[220px] shrink-0 flex-col border-r border-hairline bg-sidebar">
       <div className="drag-region h-[52px] shrink-0" />
-      <div className="flex-1 overflow-y-auto px-2.5 pb-3">
+      <div className="flex flex-1 flex-col gap-0.5 overflow-y-auto px-2.5 pb-3">
         <Heading>Library</Heading>
-        {KINDS.map(({ kind, Icon }) => (
-          <Item
-            key={kind}
-            icon={<Icon size={15} />}
-            label={KIND_LABELS[kind]}
-            count={memes.filter((meme) => matchesFilter(meme, kind)).length}
-            active={filter === kind}
-            onClick={() => onFilter(kind)}
-          />
-        ))}
+        <Item
+          icon={<Images size={16} className={libraryIcon} />}
+          label="All memes"
+          count={memes.length}
+          active={scope.by === 'all'}
+          onClick={() => onScope({ by: 'all' })}
+        />
+        <Item
+          icon={<Clock size={16} className={libraryIcon} />}
+          label="Recently used"
+          active={scope.by === 'recent'}
+          onClick={() => onScope({ by: 'recent' })}
+        />
 
         {tags.length > 0 && (
           <Heading>
             Tags
-            {tags.length > TAG_PREVIEW && (
-              <button
-                onClick={() => setShowAllTags(!showAllTags)}
-                className="font-medium hover:text-secondary"
-              >
-                {showAllTags ? 'Show Less' : 'Show All'}
-              </button>
-            )}
+            <button
+              onClick={() => setEditing(!editing)}
+              className="rounded font-medium outline-none hover:text-mute focus-visible:ring-2 focus-visible:ring-accent/60"
+            >
+              {editing ? 'Done' : 'Edit'}
+            </button>
           </Heading>
         )}
-        {visibleTags.map(([tag, count]) => (
-          <Item
-            key={tag}
-            icon={<Hash size={14} />}
-            label={tag}
-            count={count}
-            active={filter === `tag:${tag}`}
-            onClick={() => onFilter(`tag:${tag}`)}
-          />
-        ))}
+        {visibleTags.map(([tag, count]) =>
+          editing ? (
+            <EditTagRow
+              key={tag}
+              tag={tag}
+              count={count}
+              onRename={(to) => rename(tag, to)}
+              onDelete={() => remove(tag, count)}
+            />
+          ) : (
+            <Item
+              key={tag}
+              icon={
+                <Tag
+                  size={14}
+                  className={isActiveTag(tag) ? 'shrink-0 text-accent' : 'shrink-0 text-ash'}
+                />
+              }
+              label={tag}
+              count={count}
+              active={isActiveTag(tag)}
+              onClick={() => onScope({ by: 'tag', tag })}
+            />
+          )
+        )}
+        {(hiddenCount > 0 || showAllTags) && tags.length > TAG_PREVIEW && (
+          <button
+            onClick={() => setShowAllTags(!showAllTags)}
+            className={`${ROW} text-mute hover:bg-surface-2/70 focus-visible:ring-2 focus-visible:ring-accent/60`}
+          >
+            {showAllTags ? (
+              <ChevronUp size={14} className="shrink-0" />
+            ) : (
+              <ChevronDown size={14} className="shrink-0" />
+            )}
+            {showAllTags ? 'Show less' : `${hiddenCount} more`}
+          </button>
+        )}
       </div>
 
-      <div className="flex shrink-0 flex-col gap-0.5 border-t border-separator p-2.5">
-        <AutoTagNote status={autoTag} />
-        <HotkeyButton onError={onError} />
-        <div className="grid grid-cols-[1fr_1fr_auto] gap-1">
-          <button
-            onClick={onImport}
-            className="flex h-7 items-center justify-center gap-1.5 rounded-md text-secondary hover:bg-control hover:text-label"
-          >
-            <Download size={14} /> Import
-          </button>
-          <button
-            onClick={onExport}
-            className="flex h-7 items-center justify-center gap-1.5 rounded-md text-secondary hover:bg-control hover:text-label"
-          >
-            <Upload size={14} /> Export
-          </button>
-          <button
-            onClick={() => void window.api.openSettings()}
-            title="Settings (⌘,)"
-            aria-label="Settings"
-            className="flex size-7 items-center justify-center rounded-md text-secondary hover:bg-control hover:text-label"
-          >
-            <Settings size={14} />
-          </button>
+      <div className="flex shrink-0 items-center gap-2 border-t border-hairline px-3 py-2.5">
+        <div className="min-w-0 flex-1">
+          <AutoTagNote status={autoTag} onError={onError} />
         </div>
+        <Pill
+          icon
+          size="sm"
+          aria-label="Settings"
+          title={`Settings (${shortcutText(',', window.api.isMac)})`}
+          onClick={() => window.api.openSettings().catch(onError)}
+        >
+          <Settings size={14} />
+        </Pill>
       </div>
     </nav>
   )

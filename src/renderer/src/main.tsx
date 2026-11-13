@@ -3,6 +3,7 @@ import './assets/main.css'
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { DataModeSwitch } from './components/DataModeSwitch'
+import { isModHeld } from './lib/accelerator'
 import { LibraryView } from './views/LibraryView'
 import { PopupView } from './views/PopupView'
 import { SettingsView } from './views/SettingsView'
@@ -13,10 +14,10 @@ if (window.api.isMac) document.documentElement.classList.add('mac')
 // The main process loads this page with `#library`, `#popup` or `#settings`.
 const view = window.location.hash.slice(1)
 
-// ⌘, opens Settings from every window. The macOS menu has it too, but the popup is a panel
-// that never makes the app active, so the menu shortcut does not reach it.
+// ⌘, (Ctrl+, elsewhere) opens Settings from every window. The macOS menu has it too, but the
+// popup is a panel that never makes the app active, so the menu shortcut does not reach it.
 window.addEventListener('keydown', (event) => {
-  if ((event.metaKey || event.ctrlKey) && event.key === ',') {
+  if (isModHeld(event, window.api.isMac) && event.key === ',') {
     event.preventDefault()
     void window.api.openSettings()
   }

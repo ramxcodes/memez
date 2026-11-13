@@ -1,8 +1,6 @@
 import { readFile } from 'node:fs/promises'
+import { modelInfo, type ModelId, type ModelRole } from '../shared/models'
 import { writeAtomic } from './library'
-
-/** CLIP text model for queries. Its files are part of the first-launch download (see autotag). */
-export const SEARCH_MODEL = 'Xenova/clip-vit-base-patch32'
 const UNLOAD_AFTER_MS = 5 * 60_000
 
 /**
@@ -27,6 +25,7 @@ export async function openVectors(path: string) {
 
   return {
     has: (id: string): boolean => id in vectors,
+    get: (id: string): number[] | undefined => vectors[id],
     entries: (): [string, number[]][] => Object.entries(vectors),
     set(id: string, vector: number[]): Promise<void> {
       vectors[id] = vector.map((x) => Math.round(x * 1e5) / 1e5) // Smaller file, same ranking.
@@ -38,6 +37,11 @@ export async function openVectors(path: string) {
       const stale = Object.keys(vectors).filter((id) => !keep.has(id))
       if (stale.length === 0) return Promise.resolve()
       stale.forEach((id) => delete vectors[id])
+      return save()
+    },
+    /** Drops every vector. For a new CLIP model: its vectors have another length and meaning. */
+    clear(): Promise<void> {
+      vectors = {}
       return save()
     }
   }
@@ -63,21 +67,56 @@ export function pickMatches(scores: { id: string; score: number }[]): string[] {
     .map(({ id }) => id)
 }
 
+// CLIP image vectors all point roughly the same way, so image-to-image scores run high:
+// unrelated images usually score about 0.45 to 0.7, the same subject or template about 0.75 to
+// 0.9, and near-copies (a crop, a resize, another frame) 0.95 or more. In a small synthetic test
+// library every pair scored 0.43 to 0.72, so a high floor like 0.8 found nothing at all. The
+// list is best first, so 0.6 only drops images that are clearly unrelated.
+const MIN_SIMILARITY = 0.6
+const MAX_SIMILAR = 24
+
+const dot = (a: number[], b: number[]): number => a.reduce((sum, x, i) => sum + x * b[i], 0)
+
+/**
+ * Ids of the memes whose image vector is close to `target`, best first. Vectors are unit length,
+ * so the dot product is the cosine. `exclude` is the meme being compared, left out of its own list.
+ */
+export function rankSimilar(
+  target: number[],
+  entries: [string, number[]][],
+  exclude?: string
+): string[] {
+  return entries
+    .filter(([id]) => id !== exclude)
+    .map(([id, vector]) => ({ id, score: dot(target, vector) }))
+    .filter(({ score }) => score >= MIN_SIMILARITY)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, MAX_SIMILAR)
+    .map(({ id }) => id)
+}
+
 /**
  * Search by meaning: "crying" finds a crying cat with no such tag or title.
  * Best effort: before the models are downloaded, or on any failure, it finds nothing.
  * The text model loads on first use and unloads after a quiet time.
  * `isEnabled` is the user's "Local AI" setting; when it is off, it finds nothing.
  */
-export function createSemanticSearch(cacheDir: string, vectors: Vectors, isEnabled: () => boolean) {
-  const loadTextModel = async () => {
+export function createSemanticSearch(
+  cacheDir: string,
+  vectors: Vectors,
+  isEnabled: () => boolean,
+  activeModels: () => Record<ModelRole, ModelId>
+) {
+  // The CLIP text model for queries. Its files come with the tag model's download (see autotag).
+  const loadTextModel = async (id: ModelId) => {
+    const { repo, dtype } = modelInfo(id)
     const ai = await import('@huggingface/transformers')
     ai.env.cacheDir = cacheDir
     // Never download here: the auto tagger owns the download and shows its progress.
     const options = { local_files_only: true }
     const [tokenizer, model] = await Promise.all([
-      ai.AutoTokenizer.from_pretrained(SEARCH_MODEL, options),
-      ai.CLIPTextModelWithProjection.from_pretrained(SEARCH_MODEL, { ...options, dtype: 'fp16' })
+      ai.AutoTokenizer.from_pretrained(repo, options),
+      ai.CLIPTextModelWithProjection.from_pretrained(repo, { ...options, dtype })
     ])
     return {
       async embed(text: string): Promise<number[]> {
@@ -89,6 +128,8 @@ export function createSemanticSearch(cacheDir: string, vectors: Vectors, isEnabl
   }
 
   let textModel: ReturnType<typeof loadTextModel> | null = null
+  // The CLIP model `textModel` belongs to. A switch in Settings loads the new one on next use.
+  let textModelId: ModelId | null = null
   let unloadTimer: ReturnType<typeof setTimeout> | undefined
 
   const unload = async (): Promise<void> => {
@@ -99,9 +140,12 @@ export function createSemanticSearch(cacheDir: string, vectors: Vectors, isEnabl
   }
 
   const getTextModel = (): ReturnType<typeof loadTextModel> => {
+    const id = activeModels().clip
+    if (textModelId !== id) void unload() // Drops the old model at once, frees it in the background.
     clearTimeout(unloadTimer)
     unloadTimer = setTimeout(() => void unload(), UNLOAD_AFTER_MS)
-    textModel ??= loadTextModel().catch((error: unknown) => {
+    textModelId = id
+    textModel ??= loadTextModel(id).catch((error: unknown) => {
       textModel = null
       throw error
     })
@@ -122,9 +166,7 @@ export function createSemanticSearch(cacheDir: string, vectors: Vectors, isEnabl
       try {
         // The same wording the tag words use. It ranked the right memes first in tests.
         const q = await (await getTextModel()).embed(`a picture of ${query.trim()}`)
-        return pickMatches(
-          entries.map(([id, v]) => ({ id, score: v.reduce((sum, x, i) => sum + x * q[i], 0) }))
-        )
+        return pickMatches(entries.map(([id, v]) => ({ id, score: dot(v, q) })))
       } catch (error) {
         console.warn('Semantic search failed', error)
         return []
@@ -134,3 +176,5 @@ export function createSemanticSearch(cacheDir: string, vectors: Vectors, isEnabl
     unload
   }
 }
+
+export type SemanticSearch = ReturnType<typeof createSemanticSearch>

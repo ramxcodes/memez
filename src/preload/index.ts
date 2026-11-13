@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
-import type { AutoTagStatus, MemezApi, MemezIpc } from '../shared/types'
+import type { AutoTagStatus, MemezApi, MemezIpc, ModelState } from '../shared/types'
 
 // The main process registers one handler per `MemezIpc` key (see `registerIpc`).
 const invoke = <K extends keyof MemezIpc>(
@@ -35,10 +35,23 @@ const api: MemezApi = {
   semanticSearch: (query) => invoke('semanticSearch', query),
   getSettings: () => invoke('getSettings'),
   updateSettings: (patch) => invoke('updateSettings', patch),
-  getModelInfo: () => invoke('getModelInfo'),
+  listModels: () => invoke('listModels'),
+  downloadModel: (id) => invoke('downloadModel', id),
+  cancelDownload: (id) => invoke('cancelDownload', id),
+  useModel: (id) => invoke('useModel', id),
+  deleteModel: (id) => invoke('deleteModel', id),
   deleteModels: () => invoke('deleteModels'),
+  retagAll: () => invoke('retagAll'),
+  findSimilar: (id) => invoke('findSimilar', id),
+  searchByImage: (path) => invoke('searchByImage', path),
+  renameTag: (from, to) => invoke('renameTag', from, to),
+  deleteTag: (tag) => invoke('deleteTag', tag),
+  setBackup: (on) => invoke('setBackup', on),
+  chooseBackupFolder: () => invoke('chooseBackupFolder'),
+  backupNow: () => invoke('backupNow'),
   openSettings: () => invoke('openSettings'),
   showFolder: (folder) => invoke('showFolder', folder),
+  getLibraryFolder: () => invoke('getLibraryFolder'),
   canPaste: () => invoke('canPaste'),
   openPasteAccess: () => invoke('openPasteAccess'),
   retryAutoTag: () => invoke('retryAutoTag'),
@@ -53,6 +66,11 @@ const api: MemezApi = {
     const handler = (_: unknown, status: AutoTagStatus): void => listener(status)
     ipcRenderer.on('autotag:status', handler)
     return () => ipcRenderer.off('autotag:status', handler)
+  },
+  onModelsChanged: (listener) => {
+    const handler = (_: unknown, models: ModelState[]): void => listener(models)
+    ipcRenderer.on('models:changed', handler)
+    return () => ipcRenderer.off('models:changed', handler)
   }
 }
 

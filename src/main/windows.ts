@@ -60,24 +60,27 @@ export function createLibraryWindow(isQuitting: () => boolean): BrowserWindow {
   return window
 }
 
-/** The Settings window (⌘,). Small and fixed, like macOS settings windows. */
+/** The Settings window (⌘,). Fixed width like macOS settings windows; the height can grow. */
 export function createSettingsWindow(): BrowserWindow {
   const window = createWindow('settings', {
-    width: 460,
-    height: 580,
-    resizable: false,
+    width: 620,
+    height: 760,
+    minWidth: 620,
+    maxWidth: 620,
+    minHeight: 520,
     minimizable: false,
     maximizable: false,
     fullscreenable: false,
     title: 'Settings',
     titleBarStyle: 'hiddenInset',
-    trafficLightPosition: { x: 16, y: 16 }
+    trafficLightPosition: { x: 18, y: 16 }
   })
   window.on('ready-to-show', () => window.show())
   return window
 }
 
-const POPUP_SIZE = { width: 560, height: 300 }
+// Doop frame 2P1hidvm2b: search 54, grid of two 96px rows, footer 42.
+const POPUP_SIZE = { width: 560, height: 312 }
 
 /**
  * The hotkey search window. On macOS it is a panel: it floats over full-screen apps and does not

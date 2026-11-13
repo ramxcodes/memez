@@ -7,6 +7,7 @@ import { useEffect, useState } from 'react'
 import { readIndex } from '../../src/main/library'
 import { byRecentUse, createSearch } from '../../src/renderer/src/lib/search'
 import { mediaFileName, mediaKind, type Meme } from '../../src/shared/types'
+import { kindSubtitle, memeCount, sectionTitle } from './item'
 import { addFromClipboard, markUsed } from './memez'
 import { pageAfter } from './page'
 import { videoPoster } from './poster'
@@ -32,6 +33,8 @@ async function rankedMemes(query: string): Promise<Meme[]> {
  */
 export default function SearchMemes() {
   const [query, setQuery] = useState('')
+  // Memes that match, across all pages. Shown next to the section title.
+  const [total, setTotal] = useState(0)
   // A bad library.json throws here. Raycast shows a toast, and the grid shows the error.
   const {
     data: memes = [],
@@ -41,8 +44,11 @@ export default function SearchMemes() {
     revalidate
   } = usePromise(
     (query: string) =>
-      async ({ lastItem }: { lastItem?: Meme }) =>
-        pageAfter(await rankedMemes(query), lastItem?.id),
+      async ({ lastItem }: { lastItem?: Meme }) => {
+        const ranked = await rankedMemes(query)
+        setTotal(ranked.length)
+        return pageAfter(ranked, lastItem?.id)
+      },
     [query]
   )
 
@@ -65,7 +71,7 @@ export default function SearchMemes() {
 
   return (
     <Grid
-      columns={5}
+      columns={4}
       fit={Grid.Fit.Contain}
       isLoading={isLoading}
       pagination={pagination}
@@ -82,9 +88,11 @@ export default function SearchMemes() {
           </ActionPanel>
         }
       />
-      {memes.map((meme) => (
-        <MemeItem key={meme.id} meme={meme} />
-      ))}
+      <Grid.Section title={sectionTitle(query)} subtitle={memeCount(total)}>
+        {memes.map((meme) => (
+          <MemeItem key={meme.id} meme={meme} />
+        ))}
+      </Grid.Section>
     </Grid>
   )
 }
@@ -124,19 +132,36 @@ function MemeItem({ meme }: { meme: Meme }) {
   return (
     <Grid.Item
       content={image ? { source: image } : { fileIcon: path }}
-      title={meme.title}
-      subtitle={meme.tags.join(' ')}
+      title={meme.title || 'Untitled'}
+      subtitle={kindSubtitle(meme)}
       quickLook={isWebm ? undefined : { path, name: meme.title }}
       actions={
         <ActionPanel>
-          <Action.Paste title="Paste Meme" content={{ file: path }} onPaste={used} />
-          <Action.CopyToClipboard title="Copy Meme" content={{ file: path }} onCopy={used} />
+          <Action.Paste
+            title="Paste Meme"
+            icon={Icon.Clipboard}
+            content={{ file: path }}
+            onPaste={used}
+          />
+          <Action.CopyToClipboard
+            title="Copy Meme"
+            icon={Icon.CopyClipboard}
+            content={{ file: path }}
+            onCopy={used}
+          />
           {/* ⌘Y plays an MP4, or shows an image large, in macOS Quick Look. */}
-          {!isWebm && <Action.ToggleQuickLook shortcut={{ modifiers: ['cmd'], key: 'y' }} />}
+          {!isWebm && (
+            <Action.ToggleQuickLook icon={Icon.Eye} shortcut={{ modifiers: ['cmd'], key: 'y' }} />
+          )}
           <AddAction />
-          <Action.ShowInFinder path={path} shortcut={{ modifiers: ['cmd', 'shift'], key: 'f' }} />
+          <Action.ShowInFinder
+            path={path}
+            icon={Icon.Finder}
+            shortcut={{ modifiers: ['cmd', 'shift'], key: 'f' }}
+          />
           <Action.CopyToClipboard
             title="Copy Path"
+            icon={Icon.Link}
             content={path}
             shortcut={{ modifiers: ['cmd', 'shift'], key: 'c' }}
           />
