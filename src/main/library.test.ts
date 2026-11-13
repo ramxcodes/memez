@@ -74,6 +74,26 @@ describe('openLibrary', () => {
     expect(library.get(meme.id).title).toBe('Cat on a table')
   })
 
+  it('marks who wrote the title, and re-tag replaces only AI titles', async () => {
+    const library = await openLibrary(await tempDir())
+    const ai = (await library.add(png(1))).meme
+    const typed = (await library.add(png(2))).meme
+    await library.applyAutoTags(ai.id, { title: 'Cat on a table', tags: [] })
+    await library.update(typed.id, { title: 'mine' })
+    expect(library.get(ai.id).titleSource).toBe('ai')
+    expect(library.get(typed.id).titleSource).toBe('user')
+
+    const retag = { title: 'Cat on a chair', tags: [] }
+    await library.applyAutoTags(ai.id, retag, 'retag')
+    await library.applyAutoTags(typed.id, retag, 'retag')
+    expect(library.get(ai.id)).toMatchObject({ title: 'Cat on a chair', titleSource: 'ai' })
+    expect(library.get(typed.id)).toMatchObject({ title: 'mine', titleSource: 'user' })
+
+    // Clearing the title clears its source, so the AI may fill it again.
+    await library.update(typed.id, { title: ' ' })
+    expect(library.get(typed.id).titleSource).toBeUndefined()
+  })
+
   it('ignores AI tags for a meme deleted while the model ran', async () => {
     const library = await openLibrary(await tempDir())
     const { meme } = await library.add(png(1))
@@ -91,5 +111,55 @@ describe('openLibrary', () => {
 
     expect(library.list()).toEqual([])
     expect(await readdir(join(root, 'media'))).toEqual([])
+  })
+})
+
+describe('tag rename and delete', () => {
+  const tagged = async (...tagLists: string[][]): ReturnType<typeof openLibrary> => {
+    const library = await openLibrary(await tempDir())
+    for (const [seed, tags] of tagLists.entries()) await library.add(png(seed), { tags })
+    return library
+  }
+  const allTags = (library: Awaited<ReturnType<typeof openLibrary>>): string[][] =>
+    library.list().map((meme) => meme.tags)
+
+  it('renames a tag on every meme and saves it', async () => {
+    const root = await tempDir()
+    const library = await openLibrary(root)
+    await library.add(png(1), { tags: ['sad', 'cat'] })
+    await library.add(png(2), { tags: ['sad'] })
+    await library.renameTag('Sad', ' #Crying ')
+
+    expect(allTags(library)).toEqual([['crying'], ['crying', 'cat']])
+    expect(allTags(await openLibrary(root))).toEqual(allTags(library))
+  })
+
+  it('merges into an existing tag without duplicates', async () => {
+    const library = await tagged(['sad', 'cat', 'crying'])
+    await library.renameTag('sad', 'crying')
+
+    expect(allTags(library)).toEqual([['crying', 'cat']])
+  })
+
+  it('does nothing and does not save for an unknown tag', async () => {
+    const root = await tempDir()
+    const library = await openLibrary(root)
+    await library.renameTag('nope', 'other')
+    await library.deleteTag('nope')
+
+    await expect(readFile(join(root, 'library.json'))).rejects.toThrow('ENOENT')
+  })
+
+  it('refuses an empty new name', async () => {
+    const library = await tagged(['sad'])
+    await expect(library.renameTag('sad', ' # ')).rejects.toThrow('A tag needs a name.')
+    expect(allTags(library)).toEqual([['sad']])
+  })
+
+  it('deletes a tag from every meme', async () => {
+    const library = await tagged(['sad', 'cat'], ['sad'])
+    await library.deleteTag('#SAD')
+
+    expect(allTags(library)).toEqual([[], ['cat']])
   })
 })

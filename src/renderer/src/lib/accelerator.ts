@@ -46,7 +46,7 @@ export function toAccelerator(event: KeyPress): string | null {
   return [...modifiers, key].join('+')
 }
 
-const SYMBOLS: Record<string, string> = {
+const MAC_KEYS: Record<string, string> = {
   CommandOrControl: '⌘',
   Command: '⌘',
   Control: '⌃',
@@ -54,6 +54,26 @@ const SYMBOLS: Record<string, string> = {
   Shift: '⇧'
 }
 
-/** `Command+Shift+M` → `['⌘', '⇧', 'M']`, one entry per keycap. */
-export const acceleratorKeys = (accelerator: string): string[] =>
-  accelerator.split('+').map((part) => SYMBOLS[part] ?? part)
+// Linux and Windows name the keys. Electron's `Command` is the Super (Windows) key there.
+const OTHER_KEYS: Record<string, string> = {
+  CommandOrControl: 'Ctrl',
+  Command: 'Super',
+  Control: 'Ctrl'
+}
+
+/** `Command+Shift+M` → `['⌘', '⇧', 'M']` on macOS, `['Super', 'Shift', 'M']` elsewhere. One per keycap. */
+export const acceleratorKeys = (accelerator: string, isMac: boolean): string[] =>
+  accelerator.split('+').map((part) => (isMac ? MAC_KEYS : OTHER_KEYS)[part] ?? part)
+
+/** The main shortcut key, for hints like ⌘F: ⌘ on macOS, Ctrl elsewhere. */
+export const modKey = (isMac: boolean): string => (isMac ? '⌘' : 'Ctrl')
+
+/** A shortcut as text, for tooltips: "⌘V" on macOS, "Ctrl+V" elsewhere. */
+export const shortcutText = (key: string, isMac: boolean): string =>
+  isMac ? `⌘${key}` : `Ctrl+${key}`
+
+/** True when the main shortcut key is held: ⌘ on macOS, Ctrl elsewhere. */
+export const isModHeld = (
+  event: Pick<KeyboardEvent, 'metaKey' | 'ctrlKey'>,
+  isMac: boolean
+): boolean => (isMac ? event.metaKey : event.ctrlKey)

@@ -33,7 +33,7 @@ export async function readIndex(indexPath: string): Promise<Meme[]> {
 }
 
 /** Writes to a temp file, then renames it, so a crash never leaves a half-written file. */
-export async function writeAtomic(path: string, content: string): Promise<void> {
+export async function writeAtomic(path: string, content: string | Uint8Array): Promise<void> {
   const tmp = `${path}.tmp`
   await writeFile(tmp, content)
   await rename(tmp, path)
@@ -68,10 +68,24 @@ export async function openLibrary(root: string) {
     return meme
   }
 
-  /** Adds new tags and fills an empty title. Never removes data the user already typed. */
-  const merge = (meme: Meme, patch: MemePatch): void => {
-    if (!meme.title && patch.title) meme.title = patch.title.trim()
+  /**
+   * Adds new tags and fills an empty title. Never removes data the user already typed.
+   * `titleSource` says who wrote `patch.title`; it is kept only when that title is used.
+   */
+  const merge = (meme: Meme, patch: MemePatch, titleSource?: Meme['titleSource']): void => {
+    if (!meme.title && patch.title) {
+      meme.title = patch.title.trim()
+      if (meme.title && titleSource) meme.titleSource = titleSource
+    }
     if (patch.tags) meme.tags = normalizeTags([...meme.tags, ...patch.tags])
+  }
+
+  /** Changes the tags of every meme that has `tag`, with one save. No meme has it: no save. */
+  const editTag = async (tag: string, edit: (tags: string[]) => string[]): Promise<void> => {
+    const tagged = memes.filter((meme) => meme.tags.includes(tag))
+    if (tagged.length === 0) return
+    tagged.forEach((meme) => (meme.tags = normalizeTags(edit(meme.tags))))
+    await save()
   }
 
   return {
@@ -83,8 +97,15 @@ export async function openLibrary(root: string) {
 
     pathOf: (meme: Meme): string => join(mediaDir, mediaFileName(meme)),
 
-    /** Stores the file bytes. If the same bytes are already stored, merges `patch` into that meme. */
-    async add(bytes: Uint8Array, patch: MemePatch = {}): Promise<ImportResult> {
+    /**
+     * Stores the file bytes. If the same bytes are already stored, merges `patch` into that meme.
+     * `titleSource` says who wrote `patch.title` (a zip import keeps it).
+     */
+    async add(
+      bytes: Uint8Array,
+      patch: MemePatch = {},
+      titleSource?: Meme['titleSource']
+    ): Promise<ImportResult> {
       const ext = sniffExt(bytes)
       if (!ext) throw new Error('Unsupported file. Use PNG, JPG, WebP, GIF, MP4 or WebM.')
       const id = createHash('sha256').update(bytes).digest('hex').slice(0, 16)
@@ -95,7 +116,7 @@ export async function openLibrary(root: string) {
       // Check again after the await: the same file can arrive twice at the same time.
       const existing = find(id)
       if (existing) {
-        merge(existing, patch)
+        merge(existing, patch, titleSource)
         await save()
         return { meme: { ...existing }, duplicate: true }
       }
@@ -107,6 +128,7 @@ export async function openLibrary(root: string) {
         tags: normalizeTags(patch.tags ?? []),
         addedAt: new Date().toISOString()
       }
+      if (meme.title && titleSource) meme.titleSource = titleSource
       memes = [meme, ...memes]
       await save()
       return { meme: { ...meme }, duplicate: false }
@@ -114,7 +136,11 @@ export async function openLibrary(root: string) {
 
     async update(id: string, patch: MemePatch): Promise<Meme> {
       const meme = get(id)
-      if (patch.title !== undefined) meme.title = patch.title.trim()
+      if (patch.title !== undefined) {
+        meme.title = patch.title.trim()
+        if (meme.title) meme.titleSource = 'user'
+        else delete meme.titleSource
+      }
       if (patch.tags !== undefined) meme.tags = normalizeTags(patch.tags)
       await save()
       return { ...meme }
@@ -128,15 +154,40 @@ export async function openLibrary(root: string) {
     },
 
     /**
-     * Saves the AI suggestion and marks the meme as done, so it never runs again.
-     * Uses the same rule as a duplicate import: fills an empty title, only adds tags.
+     * Saves the AI suggestion and marks the meme as done, so it never runs again on its own.
+     * `fill` uses the same rule as a duplicate import: fills an empty title, only adds tags.
+     * `retag` ("Re-tag all") also replaces a title the AI wrote. Never one the user typed.
      */
-    async applyAutoTags(id: string, suggestion: Required<MemePatch>): Promise<void> {
+    async applyAutoTags(
+      id: string,
+      suggestion: Required<MemePatch>,
+      mode: 'fill' | 'retag' = 'fill'
+    ): Promise<void> {
       const meme = find(id)
       if (!meme) return // Deleted while the model was running.
+      if (mode === 'retag' && meme.titleSource === 'ai') meme.title = ''
+      const untitled = !meme.title
       merge(meme, suggestion)
+      if (untitled && meme.title) meme.titleSource = 'ai'
       meme.autoTagged = true
       await save()
+    },
+
+    /**
+     * Renames a tag on every meme, with one save. Renaming into an existing tag merges them.
+     * An unknown tag does nothing. An empty new name throws.
+     */
+    async renameTag(from: string, to: string): Promise<void> {
+      const [name] = normalizeTags([to])
+      if (!name) throw new Error('A tag needs a name.')
+      const [old = ''] = normalizeTags([from])
+      await editTag(old, (tags) => tags.map((tag) => (tag === old ? name : tag)))
+    },
+
+    /** Removes a tag from every meme, with one save. An unknown tag does nothing. */
+    async deleteTag(tag: string): Promise<void> {
+      const [name = ''] = normalizeTags([tag])
+      await editTag(name, (tags) => tags.filter((other) => other !== name))
     },
 
     async markUsed(id: string): Promise<void> {

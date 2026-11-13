@@ -8,15 +8,14 @@ import {
 } from '../shared/types'
 import type { Library } from './library'
 import { normalizeTags } from './library'
-import { SEARCH_MODEL, type Vectors } from './semantic'
+import { modelInfo, type ModelId, type ModelRole } from '../shared/models'
+import type { Vectors } from './semantic'
 
-// Both models run on this device. They download once (about 570 MB) into `cacheDir`.
-// Florence-2 writes a short caption, which becomes the title.
-const CAPTION_MODEL = 'onnx-community/Florence-2-base-ft'
-// CLIP scores the image against `TAG_WORDS`; the best words become tags. Its image vector also
-// powers search by meaning (see semantic.ts), so both use the same model.
+// Both models run on this device. They download once into `cacheDir` (see shared/models.ts).
+// The caption model (Florence-2) writes a short caption, which becomes the title.
+// The CLIP model scores the image against `TAG_WORDS`; the best words become tags. Its image
+// vector also powers search by meaning (see semantic.ts), so both use the same model.
 // fp16 keeps CLIP's accuracy; 8-bit CLIP gave noisy tags in our tests.
-const TAG_MODEL = SEARCH_MODEL
 
 /** Words the tag model can pick: well-known memes, feelings, actions and things. */
 export const TAG_WORDS = [
@@ -99,25 +98,45 @@ interface Models {
   dispose(): Promise<void>
 }
 
-/** Loads both models. Downloads them first when they are not in `cacheDir`. */
-async function loadModels(cacheDir: string, onProgress: (fraction: number) => void) {
-  const ai = await import('@huggingface/transformers')
-  ai.env.cacheDir = cacheDir
-
-  // Each file reports its own bytes. Add them up for one progress value.
+/**
+ * A transformers.js `progress_callback` that adds up the bytes of every file it downloads and
+ * calls `onProgress` with one fraction from 0 to 1. Files report only once they start, so the
+ * total is at least `expectedBytes` (the catalog size): else the first small files read 100%.
+ * Progress fires many times a second, so it calls only when the whole percent changes.
+ * Used by the auto tagger and by downloads in Settings.
+ */
+export function sumProgress(onProgress: (fraction: number) => void, expectedBytes: number) {
   const files = new Map<string, { loaded: number; total: number }>()
-  const progress_callback = (info: ProgressInfo): void => {
+  let percent = 0
+  return (info: ProgressInfo): void => {
     if (info.status !== 'progress') return
     files.set(`${info.name}/${info.file}`, info)
     let loaded = 0
-    let total = 0
+    let started = 0
     for (const file of files.values()) {
       loaded += file.loaded
-      total += file.total
+      started += file.total
     }
-    if (total > 0) onProgress(loaded / total)
+    const total = Math.max(started, expectedBytes)
+    if (total === 0 || Math.floor((loaded / total) * 100) === percent) return
+    percent = Math.floor((loaded / total) * 100)
+    onProgress(loaded / total)
   }
-  const options = { progress_callback }
+}
+
+/** Loads both models. Downloads them first when they are not in `cacheDir`. */
+async function loadModels(
+  cacheDir: string,
+  active: Record<ModelRole, ModelId>,
+  onProgress: (fraction: number) => void
+) {
+  const captioner = modelInfo(active.caption)
+  const clip = modelInfo(active.clip)
+  const ai = await import('@huggingface/transformers')
+  ai.env.cacheDir = cacheDir
+
+  const expectedBytes = captioner.approxBytes + clip.approxBytes
+  const options = { progress_callback: sumProgress(onProgress, expectedBytes) }
 
   const [
     captionProcessor,
@@ -129,18 +148,18 @@ async function loadModels(cacheDir: string, onProgress: (fraction: number) => vo
     textModel
   ] = await Promise.all([
     // The typings return the base `Processor`; the object is a `Florence2Processor`.
-    ai.Florence2Processor.from_pretrained(CAPTION_MODEL, options) as Promise<
+    ai.Florence2Processor.from_pretrained(captioner.repo, options) as Promise<
       InstanceType<typeof ai.Florence2Processor>
     >,
-    ai.AutoTokenizer.from_pretrained(CAPTION_MODEL, options),
-    ai.Florence2ForConditionalGeneration.from_pretrained(CAPTION_MODEL, {
+    ai.AutoTokenizer.from_pretrained(captioner.repo, options),
+    ai.Florence2ForConditionalGeneration.from_pretrained(captioner.repo, {
       ...options,
-      dtype: 'q8'
+      dtype: captioner.dtype
     }),
-    ai.AutoProcessor.from_pretrained(TAG_MODEL, options),
-    ai.AutoTokenizer.from_pretrained(TAG_MODEL, options),
-    ai.CLIPVisionModelWithProjection.from_pretrained(TAG_MODEL, { ...options, dtype: 'fp16' }),
-    ai.CLIPTextModelWithProjection.from_pretrained(TAG_MODEL, { ...options, dtype: 'fp16' })
+    ai.AutoProcessor.from_pretrained(clip.repo, options),
+    ai.AutoTokenizer.from_pretrained(clip.repo, options),
+    ai.CLIPVisionModelWithProjection.from_pretrained(clip.repo, { ...options, dtype: clip.dtype }),
+    ai.CLIPTextModelWithProjection.from_pretrained(clip.repo, { ...options, dtype: clip.dtype })
   ])
 
   // The words never change, so embed them once and free the text model.
@@ -181,11 +200,15 @@ async function loadModels(cacheDir: string, onProgress: (fraction: number) => vo
   } satisfies Models
 }
 
+/** One key per pair of active models. Models loaded for another key are out of date. */
+const modelsKey = (active: Record<ModelRole, ModelId>): string => `${active.caption} ${active.clip}`
+
 /**
  * Suggests a title and tags for new memes, one at a time, with the local models.
  * It also saves each meme's CLIP vector in `vectors`, for search by meaning.
  * Best effort, like OCR: a failure is visible in the status and never blocks saving a meme.
  * The models load when there is work and unload after a quiet time, to free memory.
+ * They follow `activeModels`: after a switch in Settings, the next meme loads the new models.
  * `isEnabled` is the user's "Local AI" setting; when it is off, nothing new is queued.
  */
 export function createAutoTagger(
@@ -193,36 +216,48 @@ export function createAutoTagger(
   vectors: Vectors,
   cacheDir: string,
   isEnabled: () => boolean,
+  activeModels: () => Record<ModelRole, ModelId>,
   onStatus: (status: AutoTagStatus) => void,
   onTagged: () => void
 ) {
   let model: ModelStatus = { state: 'idle' }
-  let models: Promise<Models> | null = null
-  const pending = new Set<string>()
+  let models: { key: string; loaded: Promise<Models> } | null = null
+  /**
+   * Memes to read, with what to do. `fill`: a title and tags only when the AI has not written
+   * them yet, plus the vector. `retag`: a new title and tags even when it has (see applyAutoTags).
+   */
+  const pending = new Map<string, 'fill' | 'retag'>()
   let running = false
   let unloadTimer: ReturnType<typeof setTimeout> | undefined
 
-  const status = (): AutoTagStatus => ({ model, pending: [...pending] })
+  const status = (): AutoTagStatus => ({ model, pending: [...pending.keys()] })
   const setModel = (next: ModelStatus): void => {
     model = next
     onStatus(status())
   }
 
+  const dispose = (loaded: Promise<Models>): Promise<void> =>
+    loaded.then((m) => m.dispose()).catch((error) => console.warn('Unload failed', error))
+
+  /** The models for the active ids. Loads them, and frees models of other ids. */
   const getModels = (): Promise<Models> => {
-    if (models) return models
+    const active = activeModels()
+    const key = modelsKey(active)
+    if (models?.key === key) return models.loaded
+    if (models) void dispose(models.loaded)
     setModel({ state: 'loading', progress: 0 })
-    let percent = 0
-    models = loadModels(cacheDir, (fraction) => {
-      // Progress fires many times a second. Send it only when the whole percent changes.
-      if (Math.floor(fraction * 100) === percent) return
-      percent = Math.floor(fraction * 100)
-      setModel({ state: 'loading', progress: fraction })
+    // An older load that ends after a switch must not change the status of the newer one.
+    const isCurrent = (): boolean => models?.loaded === loaded
+    const loaded = loadModels(cacheDir, active, (progress) => {
+      if (isCurrent()) setModel({ state: 'loading', progress })
     }).then(
-      (loaded) => {
-        setModel({ state: 'ready' })
-        return loaded
+      (ready) => {
+        if (isCurrent()) setModel({ state: 'ready' })
+        return ready
       },
       (error: unknown) => {
+        // An older load's failure says nothing about the newer one.
+        if (!isCurrent()) throw error
         models = null
         setModel({
           state: 'failed',
@@ -231,17 +266,18 @@ export function createAutoTagger(
         throw error
       }
     )
-    return models
+    models = { key, loaded }
+    return loaded
   }
 
   /** Frees the models. Safe to call when they are not loaded. */
   const unload = async (): Promise<void> => {
     clearTimeout(unloadTimer)
-    const loaded = models
-    if (!loaded || running) return
+    const current = models
+    if (!current || running) return
     models = null
     setModel({ state: 'idle' })
-    await loaded.then((m) => m.dispose()).catch((error) => console.warn('Unload failed', error))
+    await dispose(current.loaded)
   }
 
   const scheduleUnload = (): void => {
@@ -253,16 +289,29 @@ export function createAutoTagger(
     if (running) return
     running = true
     try {
-      const loaded = await getModels()
-      // A Set visits items added while the loop runs, so new memes join this pass.
-      for (const id of pending) {
+      // A Map visits entries added while the loop runs, so new memes join this pass.
+      for (const [id, mode] of pending) {
+        const key = modelsKey(activeModels())
+        // An older load that fails after a model switch says nothing about the new models:
+        // load those instead of dropping the queue.
+        const loaded = await getModels().catch((error: unknown) => {
+          if (modelsKey(activeModels()) !== key) return getModels()
+          throw error
+        })
         try {
           const meme = library.list().find((other) => other.id === id)
           if (meme) {
-            const { vector, suggestion } = await loaded.read(library.pathOf(meme), !meme.autoTagged)
+            const suggest = mode === 'retag' || !meme.autoTagged
+            const { vector, suggestion } = await loaded.read(library.pathOf(meme), suggest)
+            if (modelsKey(activeModels()) !== key) {
+              // The user switched models while this meme was read. Read it again with the new
+              // ones, at the end of the queue (unless `stop` dropped it).
+              if (pending.delete(id)) pending.set(id, mode)
+              continue
+            }
             await vectors.set(id, vector)
             if (suggestion) {
-              await library.applyAutoTags(id, suggestion)
+              await library.applyAutoTags(id, suggestion, mode)
               onTagged()
             }
           }
@@ -294,7 +343,7 @@ export function createAutoTagger(
       (meme) => mediaKind(meme.ext) !== 'video' && (!meme.autoTagged || !vectors.has(meme.id))
     )
     if (todo.length === 0) return
-    todo.forEach((meme) => pending.add(meme.id))
+    todo.forEach((meme) => pending.has(meme.id) || pending.set(meme.id, 'fill'))
     onStatus(status())
     void run()
   }
@@ -302,6 +351,33 @@ export function createAutoTagger(
   return {
     status,
     queue,
+
+    /**
+     * Runs the AI again on `memes` (not videos): a new title and tags even when it wrote them
+     * before. Titles the user wrote stay. The status shows the progress like new memes.
+     */
+    retag(memes: Meme[]): void {
+      memes
+        .filter((meme) => mediaKind(meme.ext) !== 'video')
+        .forEach((meme) => pending.set(meme.id, 'retag'))
+      onStatus(status())
+      void run()
+    },
+
+    /**
+     * The CLIP image vector of the file at `path`, for search by a dropped image. Loads the models
+     * if needed (they must be downloaded already: loading downloads missing files). It never runs
+     * the slow caption model.
+     */
+    async embed(path: string): Promise<number[]> {
+      const loaded = await getModels()
+      try {
+        return (await loaded.read(path, false)).vector
+      } finally {
+        if (!running) scheduleUnload()
+      }
+    },
+
     /**
      * Loads the models (downloads them on first launch) and queues every meme still to do.
      * Runs at app start, and again when the user retries after a failed download.
@@ -323,3 +399,5 @@ export function createAutoTagger(
     unload
   }
 }
+
+export type AutoTagger = ReturnType<typeof createAutoTagger>

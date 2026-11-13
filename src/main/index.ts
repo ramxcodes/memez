@@ -13,11 +13,10 @@ import {
   protocol,
   shell,
   systemPreferences,
-  Tray,
-  type IpcMainInvokeEvent
+  Tray
 } from 'electron'
 import { execFile } from 'node:child_process'
-import { readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { readFile, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -25,11 +24,14 @@ import { promisify } from 'node:util'
 import { electronApp, optimizer } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import { MEDIA_EXTS, mediaKind, type Meme, type MemezIpc } from '../shared/types'
+import { backupHandlers } from './backup'
 import { exportZip, importZip } from './archive'
 import { createAutoTagger } from './autotag'
 import { downloadMedia, readClipboardMedia, readFiles } from './ingest'
+import type { Handlers, MainContext } from './ipc'
 import { openLibrary, type Library } from './library'
 import { parseLink } from './links'
+import { modelHandlers } from './models'
 import { createOcrQueue } from './ocr'
 import { installRaycast, isRaycastInstalled, removeRaycast, updateRaycast } from './raycast'
 import { createSemanticSearch, openVectors } from './semantic'
@@ -100,22 +102,6 @@ function setAppMenu(): void {
   )
 }
 
-/** Bytes of all files under `dir`. 0 when it does not exist. */
-async function folderSize(dir: string): Promise<number> {
-  try {
-    const entries = await readdir(dir, { recursive: true, withFileTypes: true })
-    const sizes = await Promise.all(
-      entries
-        .filter((entry) => entry.isFile())
-        .map(async (entry) => (await stat(join(entry.parentPath, entry.name))).size)
-    )
-    return sizes.reduce((a, b) => a + b, 0)
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 0
-    throw error
-  }
-}
-
 /** Shows the popup and loads the search model, so the first search by meaning is fast. */
 function openPopup(): void {
   showPopup(popup)
@@ -127,10 +113,13 @@ function togglePopup(): void {
   else openPopup()
 }
 
-/** Registers the popup hotkey. Keeps the old hotkey when the new one is taken by another app. */
-function registerHotkey(next: string, previous?: string): void {
+/**
+ * Registers the popup hotkey. `null` leaves no hotkey. Keeps the old hotkey when the new one is
+ * taken by another app.
+ */
+function registerHotkey(next: string | null, previous?: string | null): void {
   globalShortcut.unregisterAll()
-  if (globalShortcut.register(next, togglePopup)) return
+  if (next === null || globalShortcut.register(next, togglePopup)) return
   if (previous) globalShortcut.register(previous, togglePopup)
   throw new Error(`${next} is not available. Another app may use it.`)
 }
@@ -186,7 +175,7 @@ function dragIcon(library: Library, meme: Meme): Electron.NativeImage {
 function setTrayMenu(tray: Tray, settings: Settings): void {
   tray.setContextMenu(
     Menu.buildFromTemplate([
-      { label: 'Search Memes', accelerator: settings.hotkey, click: openPopup },
+      { label: 'Search Memes', accelerator: settings.hotkey ?? undefined, click: openPopup },
       { label: 'Open Library', click: openLibraryWindow },
       { label: 'Settings…', click: openSettings },
       { type: 'separator' },
@@ -195,27 +184,27 @@ function setTrayMenu(tray: Tray, settings: Settings): void {
   )
 }
 
-type Handlers = {
-  [K in keyof MemezIpc]: (
-    event: IpcMainInvokeEvent,
-    ...args: Parameters<MemezIpc[K]>
-  ) => ReturnType<MemezIpc[K]>
-}
-
 async function registerIpc(library: Library, settings: Settings): Promise<void> {
-  const queueOcr = createOcrQueue(library, () => broadcast('library:changed'))
+  const libraryListeners: (() => void)[] = []
+  const libraryChanged = (): void => {
+    broadcast('library:changed')
+    libraryListeners.forEach((listener) => listener())
+  }
+  const queueOcr = createOcrQueue(library, libraryChanged)
   const modelDir = join(app.getPath('userData'), 'models')
   const vectors = await openVectors(join(LIBRARY_ROOT, 'vectors.json'))
   await vectors.keepOnly(library.list().map((meme) => meme.id))
   const localAi = (): boolean => settings.localAi
-  semanticSearch = createSemanticSearch(modelDir, vectors, localAi)
+  const activeModels = (): Settings['models'] => settings.models
+  semanticSearch = createSemanticSearch(modelDir, vectors, localAi, activeModels)
   const autoTagger = createAutoTagger(
     library,
     vectors,
     modelDir,
     localAi,
+    activeModels,
     (status) => broadcast('autotag:status', status),
-    () => broadcast('library:changed')
+    libraryChanged
   )
 
   const addAll = async (files: Uint8Array[]): ReturnType<MemezIpc['importFiles']> => {
@@ -223,7 +212,7 @@ async function registerIpc(library: Library, settings: Settings): Promise<void> 
     for (const bytes of files) results.push(await library.add(bytes))
     results.forEach(({ meme }) => queueOcr(meme))
     autoTagger.queue(results.map(({ meme }) => meme))
-    broadcast('library:changed')
+    libraryChanged()
     return results
   }
 
@@ -233,7 +222,7 @@ async function registerIpc(library: Library, settings: Settings): Promise<void> 
       const link = parseLink(url)
       if (link.action === 'used') {
         await library.markUsed(link.id)
-        broadcast('library:changed')
+        libraryChanged()
         return
       }
       const results = await addAll(await readClipboardMedia())
@@ -254,6 +243,19 @@ async function registerIpc(library: Library, settings: Settings): Promise<void> 
     broadcast('settings:changed')
   }
 
+  const ctx: MainContext = {
+    library,
+    settings,
+    libraryRoot: LIBRARY_ROOT,
+    modelDir,
+    vectors,
+    autoTagger,
+    semanticSearch,
+    saveSettings: saveAndBroadcast,
+    broadcast,
+    onLibraryChanged: (listener) => libraryListeners.push(listener)
+  }
+
   library.list().forEach(queueOcr)
   // First launch with Local AI on: this downloads the models.
   if (settings.localAi) autoTagger.start()
@@ -265,22 +267,22 @@ async function registerIpc(library: Library, settings: Settings): Promise<void> 
     importUrl: async (_, url) => (await addAll([await downloadMedia(url)]))[0],
     update: async (_, id, patch) => {
       const meme = await library.update(id, patch)
-      broadcast('library:changed')
+      libraryChanged()
       return meme
     },
     remove: async (_, id) => {
       await library.remove(id)
-      broadcast('library:changed')
+      libraryChanged()
     },
     copy: async (_, id) => {
       await copyMeme(library, library.get(id))
       await library.markUsed(id)
-      broadcast('library:changed')
+      libraryChanged()
     },
     paste: async (_, id) => {
       await copyMeme(library, library.get(id))
       await library.markUsed(id)
-      broadcast('library:changed')
+      libraryChanged()
       popup.hide()
       // Copy only: the user chose it in Settings, or the system cannot paste for us.
       if (settings.pasteMode === 'copy' || process.platform !== 'darwin') return
@@ -304,7 +306,10 @@ async function registerIpc(library: Library, settings: Settings): Promise<void> 
       const path = library.pathOf(meme)
       Menu.buildFromTemplate([
         { label: 'Copy', click: () => void copyMeme(library, meme) },
-        { label: 'Show in Finder', click: () => shell.showItemInFolder(path) },
+        {
+          label: process.platform === 'darwin' ? 'Show in Finder' : 'Show in Folder',
+          click: () => shell.showItemInFolder(path)
+        },
         { label: 'Copy Path', click: () => void clipboard.writeText(path) }
       ]).popup({ window: BrowserWindow.fromWebContents(event.sender) ?? undefined })
     },
@@ -327,12 +332,12 @@ async function registerIpc(library: Library, settings: Settings): Promise<void> 
       const result = await importZip(library, await readFile(filePaths[0]))
       library.list().forEach(queueOcr)
       autoTagger.queue(library.list())
-      broadcast('library:changed')
+      libraryChanged()
       return result
     },
     getHotkey: async () => ({
       hotkey: settings.hotkey,
-      active: globalShortcut.isRegistered(settings.hotkey)
+      active: settings.hotkey !== null && globalShortcut.isRegistered(settings.hotkey)
     }),
     setHotkey: async (_, hotkey) => {
       registerHotkey(hotkey, settings.hotkey)
@@ -352,21 +357,16 @@ async function registerIpc(library: Library, settings: Settings): Promise<void> 
       }
       return { ...settings }
     },
-    getModelInfo: async () => ({ path: modelDir, bytes: await folderSize(modelDir) }),
-    deleteModels: async () => {
-      if (autoTagger.busy()) throw new Error('The AI is working. Try again when it is done.')
-      settings.localAi = false
-      await saveAndBroadcast()
-      autoTagger.stop()
-      await Promise.all([autoTagger.unload(), semanticSearch.unload()])
-      await rm(modelDir, { recursive: true, force: true })
-    },
     openSettings: async () => openSettings(),
     showFolder: async (_, folder) => {
       const path = folder === 'library' ? LIBRARY_ROOT : modelDir
       const error = await shell.openPath(path)
       if (error) throw new Error(error)
     },
+    getLibraryFolder: async () =>
+      LIBRARY_ROOT.startsWith(homedir()) && process.platform !== 'win32'
+        ? `~${LIBRARY_ROOT.slice(homedir().length)}`
+        : LIBRARY_ROOT,
     canPaste: async () =>
       process.platform !== 'darwin' || systemPreferences.isTrustedAccessibilityClient(false),
     openPasteAccess: async () => {
@@ -381,7 +381,17 @@ async function registerIpc(library: Library, settings: Settings): Promise<void> 
     retryAutoTag: async () => autoTagger.start(),
     isRaycastInstalled: async () => isRaycastInstalled(),
     installRaycast: async () => installRaycast(),
-    removeRaycast: async () => removeRaycast()
+    removeRaycast: async () => removeRaycast(),
+    renameTag: async (_, from, to) => {
+      await library.renameTag(from, to)
+      libraryChanged()
+    },
+    deleteTag: async (_, tag) => {
+      await library.deleteTag(tag)
+      libraryChanged()
+    },
+    ...backupHandlers(ctx),
+    ...modelHandlers(ctx)
   }
 
   for (const [channel, handler] of Object.entries(handlers)) ipcMain.handle(channel, handler)

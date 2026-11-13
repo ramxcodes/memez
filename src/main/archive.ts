@@ -32,6 +32,10 @@ const isMemeEntry = (value: unknown): value is Meme => {
   )
 }
 
+/** Who wrote an entry's title. Anything but `'ai'` or `'user'` counts as unknown. */
+const titleSourceOf = (entry: Meme): Meme['titleSource'] =>
+  entry.titleSource === 'ai' || entry.titleSource === 'user' ? entry.titleSource : undefined
+
 /**
  * Merges a zip made by `exportZip` into the library.
  * Files already in the library (same bytes) keep their data and get the new tags added.
@@ -52,7 +56,11 @@ export async function importZip(library: Library, zip: Uint8Array): Promise<ZipI
       continue
     }
 
-    const { meme, duplicate } = await library.add(bytes, { title: entry.title, tags: entry.tags })
+    const { meme, duplicate } = await library.add(
+      bytes,
+      { title: entry.title, tags: entry.tags },
+      titleSourceOf(entry)
+    )
     if (duplicate) {
       result.merged++
     } else {

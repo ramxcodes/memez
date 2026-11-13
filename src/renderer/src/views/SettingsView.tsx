@@ -1,119 +1,62 @@
-import { CircleAlert, CircleCheck, FolderOpen, Sparkles, Trash2 } from 'lucide-react'
+import {
+  Archive,
+  CircleAlert,
+  Clipboard,
+  Download,
+  FolderOpen,
+  Images,
+  Search,
+  Upload
+} from 'lucide-react'
 import { useEffect, useState, type ReactNode } from 'react'
-import type { AutoTagStatus, ModelInfo, Settings } from '../../../shared/types'
-import { ProgressBar } from '../components/AutoTagNote'
-import { HotkeyButton } from '../components/HotkeyButton'
+import { BackupRow } from '../components/settings/BackupRow'
+import { HotkeyRow } from '../components/settings/HotkeyRow'
+import { ModelsSection } from '../components/ModelsSection'
 import { NoticeBar } from '../components/NoticeBar'
-import { useAutoTagStatus, useLibrary, useNotice, useSettings } from '../lib/hooks'
+import { Card, IconTile, Pill, Row, Segmented } from '../components/ui'
+import { useLibrary, useNotice, useSettings } from '../lib/hooks'
 
-const megabytes = new Intl.NumberFormat(undefined, {
-  style: 'unit',
-  unit: 'megabyte',
-  maximumFractionDigits: 0
-})
-const formatSize = (bytes: number): string => megabytes.format(bytes / 1e6)
+const PASTE_MODES = [
+  { value: 'paste', label: 'Paste it' },
+  { value: 'copy', label: 'Copy it' }
+] as const
 
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <section className="flex flex-col gap-1.5">
-      <h2 className="px-1 text-[11px] font-semibold text-secondary">{title}</h2>
-      <div className="divide-y divide-separator rounded-[10px] bg-elevated ring-1 ring-separator">
-        {children}
-      </div>
+    <section className="flex flex-col gap-2">
+      <h2 className="px-1 text-[13px] font-semibold">{title}</h2>
+      <Card>{children}</Card>
     </section>
   )
 }
 
-function Row({ children }: { children: ReactNode }) {
-  return <div className="flex min-h-11 items-center gap-3 px-3 py-2">{children}</div>
-}
-
-function Switch(props: { checked: boolean; label: string; onChange: (checked: boolean) => void }) {
+/** Title and status line of a Settings row. */
+function RowText({ title, children }: { title: string; children?: ReactNode }) {
   return (
-    <button
-      role="switch"
-      aria-checked={props.checked}
-      aria-label={props.label}
-      onClick={() => props.onChange(!props.checked)}
-      className={`relative h-[22px] w-[38px] shrink-0 rounded-full transition-colors ${
-        props.checked ? 'bg-accent' : 'bg-control-strong'
-      }`}
-    >
-      <span
-        className={`absolute top-[2px] left-[2px] size-[18px] rounded-full bg-white shadow transition-transform ${
-          props.checked ? 'translate-x-4' : ''
-        }`}
-      />
-    </button>
+    <div className="min-w-0 flex-1">
+      <p className="font-medium">{title}</p>
+      {children && <p className="text-[12px] text-mute">{children}</p>}
+    </div>
   )
 }
 
-const buttonClass =
-  'flex h-7 shrink-0 items-center gap-1.5 rounded-md bg-control px-2.5 hover:bg-control-strong disabled:opacity-50'
-
-/** One line about the models: off, not downloaded, downloading, ready, or failed. */
-function ModelLine(props: { settings: Settings; info: ModelInfo | null; status: AutoTagStatus }) {
-  const { settings, info } = props
-  const { model, pending } = props.status
-  if (model.state === 'loading') {
-    return (
-      <div className="flex flex-1 flex-col gap-1.5">
-        <p className="flex justify-between text-secondary">
-          <span>{info?.bytes ? 'Loading models' : 'Downloading models'}</span>
-          <span className="tabular-nums">{Math.round(model.progress * 100)}%</span>
-        </p>
-        <ProgressBar value={model.progress} />
-      </div>
-    )
-  }
-  if (model.state === 'failed') {
-    return (
-      <>
-        <CircleAlert size={15} className="shrink-0 text-danger" />
-        <p className="min-w-0 flex-1 truncate text-secondary" title={model.message}>
-          {model.message}
-        </p>
-        <button onClick={() => window.api.retryAutoTag()} className={buttonClass}>
-          Retry
-        </button>
-      </>
-    )
-  }
-  const text = !info
-    ? ''
-    : info.bytes === 0
-      ? settings.localAi
-        ? 'Not downloaded yet'
-        : 'Not downloaded. Turn on to download (about 570 MB).'
-      : `${formatSize(info.bytes)} on this Mac` +
-        (pending.length > 0 ? ` · tagging ${pending.length}` : '')
-  return (
-    <>
-      {info && info.bytes > 0 && <CircleCheck size={15} className="shrink-0 text-accent" />}
-      <p className="min-w-0 flex-1 text-secondary">{text}</p>
-    </>
-  )
-}
-
-/** The Settings window (⌘,): local AI models, popup behavior and the library folder. */
+/** The Settings window (⌘,): quick search, local AI models, library and backup, Raycast. */
 export function SettingsView() {
   const { notice, show, fail } = useNotice()
   const settings = useSettings()
   const memes = useLibrary(fail)
-  const status = useAutoTagStatus()
-  const [info, setInfo] = useState<ModelInfo | null>(null)
+  const [folder, setFolder] = useState('')
   const [canPaste, setCanPaste] = useState(true)
   // null until known, and while installing or removing.
   const [raycast, setRaycast] = useState<boolean | null>(null)
 
   useEffect(() => {
-    window.api.isRaycastInstalled().then(setRaycast, fail)
+    window.api.getLibraryFolder().then(setFolder, fail)
   }, [fail])
 
-  // Model size changes after a download or a delete, so reload it when the state changes.
   useEffect(() => {
-    window.api.getModelInfo().then(setInfo, fail)
-  }, [status.model.state, settings?.localAi, fail])
+    if (window.api.isMac) window.api.isRaycastInstalled().then(setRaycast, fail)
+  }, [fail])
 
   // The user grants paste access in System Settings, then comes back here: check again.
   useEffect(() => {
@@ -126,20 +69,20 @@ export function SettingsView() {
   }, [fail])
 
   if (!settings) return null
-  const update = (patch: Partial<Settings>): void => {
-    window.api.updateSettings(patch).catch(fail)
+
+  const exportZip = async (): Promise<void> => {
+    const path = await window.api.exportZip()
+    if (path) show(`Exported to ${path}`)
   }
 
-  const deleteModels = async (): Promise<void> => {
-    const size = info ? ` (${formatSize(info.bytes)})` : ''
-    if (!confirm(`Delete the AI models${size}? Local AI turns off. You can download them again.`))
-      return
-    try {
-      await window.api.deleteModels()
-      setInfo(await window.api.getModelInfo())
-    } catch (error) {
-      fail(error)
-    }
+  const importZip = async (): Promise<void> => {
+    const result = await window.api.importZip()
+    if (!result) return
+    const skipped = result.skipped > 0 ? `, ${result.skipped} skipped` : ''
+    show(
+      `Imported ${result.added} new, ${result.merged} merged${skipped}`,
+      result.skipped ? 'error' : 'info'
+    )
   }
 
   const toggleRaycast = async (installed: boolean): Promise<void> => {
@@ -153,129 +96,100 @@ export function SettingsView() {
     window.api.isRaycastInstalled().then(setRaycast, fail)
   }
 
-  const busy = status.model.state === 'loading' || status.pending.length > 0
-
   return (
-    <div className="flex h-full flex-col bg-window">
-      <header className="drag-region flex h-[52px] shrink-0 items-center justify-center">
-        <h1 className="text-[13px] font-semibold">Settings</h1>
-      </header>
+    <div className="flex h-full flex-col bg-surface">
+      {/* Room for the macOS window buttons; drags the window everywhere. */}
+      <div className="drag-region h-11 shrink-0" />
 
-      <div className="flex flex-1 flex-col gap-5 overflow-y-auto px-5 pb-5">
-        <Section title="Local AI">
-          <Row>
-            <Sparkles size={16} className="shrink-0 text-accent" />
-            <div className="min-w-0 flex-1">
-              <p className="font-medium">Titles, tags and search by meaning</p>
-              <p className="text-[12px] text-secondary">Runs on this Mac. Nothing is uploaded.</p>
-            </div>
-            <Switch
-              label="Local AI"
-              checked={settings.localAi}
-              onChange={(localAi) => update({ localAi })}
-            />
-          </Row>
-          <Row>
-            <ModelLine settings={settings} info={info} status={status} />
-          </Row>
-          {info !== null && info.bytes > 0 && (
+      <div className="flex flex-1 flex-col gap-[22px] overflow-y-auto px-7 pt-1 pb-7">
+        <h1 className="text-[26px] leading-tight font-bold tracking-[-0.022em]">Settings</h1>
+
+        <Section title="Quick search">
+          <HotkeyRow onError={fail} />
+          {/* Linux and Windows can only copy (see the paste handler in main/index.ts). */}
+          {window.api.isMac && (
             <Row>
-              <button
-                onClick={() => window.api.showFolder('models').catch(fail)}
-                className={buttonClass}
-              >
-                <FolderOpen size={14} /> {window.api.isMac ? 'Show in Finder' : 'Show Folder'}
-              </button>
-              <span className="flex-1" />
-              <button
-                onClick={() => void deleteModels()}
-                disabled={busy}
-                title={busy ? 'Wait until the AI is done.' : undefined}
-                className={`${buttonClass} text-danger`}
-              >
-                <Trash2 size={14} /> Delete Models…
-              </button>
+              <IconTile color="orange">
+                <Clipboard size={16} />
+              </IconTile>
+              <RowText title="When you pick a meme">Pasting needs accessibility access.</RowText>
+              <Segmented
+                label="When you pick a meme"
+                options={PASTE_MODES}
+                value={settings.pasteMode}
+                onChange={(pasteMode) => window.api.updateSettings({ pasteMode }).catch(fail)}
+              />
+            </Row>
+          )}
+          {window.api.isMac && settings.pasteMode === 'paste' && !canPaste && (
+            <Row>
+              <span className="flex size-7 shrink-0 items-center justify-center">
+                <CircleAlert size={18} className="text-danger" />
+              </span>
+              <p className="min-w-0 flex-1 text-[12px] text-mute">
+                To paste for you, Memez needs Accessibility access. Until then it only copies. If
+                Memez is already on in that list, remove it with − and add it again.
+              </p>
+              <Pill size="sm" onClick={() => window.api.openPasteAccess().catch(fail)}>
+                Allow…
+              </Pill>
             </Row>
           )}
         </Section>
 
-        <Section title="Quick Search">
-          <div className="px-1 py-1">
-            <HotkeyButton onError={fail} />
-          </div>
+        <ModelsSection settings={settings} onError={fail} onInfo={show} />
+
+        <Section title="Library and backup">
           <Row>
-            <p className="flex-1">Picking a meme</p>
-            <div className="flex rounded-md bg-control p-0.5 text-[12px]">
-              {(['paste', 'copy'] as const).map((mode) => (
-                <button
-                  key={mode}
-                  onClick={() => update({ pasteMode: mode })}
-                  className={`h-6 rounded-[5px] px-3 ${
-                    settings.pasteMode === mode
-                      ? 'bg-elevated font-medium shadow-sm'
-                      : 'text-secondary'
-                  }`}
-                >
-                  {mode === 'paste' ? 'Pastes it' : 'Copies it'}
-                </button>
-              ))}
-            </div>
+            <IconTile color="gray">
+              <Images size={16} />
+            </IconTile>
+            <RowText title={`${memes.length} ${memes.length === 1 ? 'meme' : 'memes'}`}>
+              {folder}
+            </RowText>
+            <Pill size="sm" onClick={() => window.api.showFolder('library').catch(fail)}>
+              <FolderOpen size={13} /> Show
+            </Pill>
           </Row>
-          {settings.pasteMode === 'paste' && !canPaste && (
-            <Row>
-              <CircleAlert size={15} className="shrink-0 text-danger" />
-              <p className="min-w-0 flex-1 text-[12px] text-secondary">
-                To paste for you, Memez needs Accessibility access. Until then it only copies. If
-                Memez is already on in that list, remove it with − and add it again.
-              </p>
-              <button
-                onClick={() => window.api.openPasteAccess().catch(fail)}
-                className={buttonClass}
-              >
-                Allow…
-              </button>
-            </Row>
-          )}
+          <BackupRow settings={settings} onError={fail} />
+          <Row>
+            <IconTile color="green">
+              <Archive size={16} />
+            </IconTile>
+            <RowText title="Move to another computer">
+              One zip with every meme, title and tag.
+            </RowText>
+            <Pill size="sm" onClick={() => exportZip().catch(fail)}>
+              <Upload size={13} /> Export
+            </Pill>
+            <Pill size="sm" onClick={() => importZip().catch(fail)}>
+              <Download size={13} /> Import
+            </Pill>
+          </Row>
         </Section>
 
         {window.api.isMac && (
           <Section title="Raycast">
             <Row>
-              <div className="min-w-0 flex-1">
-                <p>Search and add memes from Raycast</p>
-                <p className="text-[12px] text-secondary">
-                  {raycast
-                    ? 'Installed. Type "Search Memes" in Raycast.'
-                    : 'Adds "Search Memes" and "Add Meme from Clipboard".'}
-                </p>
-              </div>
-              <button
+              <IconTile color="red">
+                <Search size={16} />
+              </IconTile>
+              <RowText title="Search and add memes from Raycast">
+                {raycast
+                  ? 'Installed. Type "Search Memes" in Raycast.'
+                  : 'Adds "Search Memes" and "Add Meme from Clipboard".'}
+              </RowText>
+              <Pill
+                size="sm"
                 onClick={() => raycast !== null && void toggleRaycast(raycast)}
                 disabled={raycast === null}
-                className={buttonClass}
+                title={raycast === null ? 'Checking Raycast…' : undefined}
               >
                 {raycast ? 'Remove' : 'Install'}
-              </button>
+              </Pill>
             </Row>
           </Section>
         )}
-
-        <Section title="Library">
-          <Row>
-            <div className="min-w-0 flex-1">
-              <p>
-                {memes.length} {memes.length === 1 ? 'meme' : 'memes'}
-              </p>
-              <p className="text-[12px] text-secondary">Your memes stay in this folder.</p>
-            </div>
-            <button
-              onClick={() => window.api.showFolder('library').catch(fail)}
-              className={buttonClass}
-            >
-              <FolderOpen size={14} /> {window.api.isMac ? 'Show in Finder' : 'Show Folder'}
-            </button>
-          </Row>
-        </Section>
       </div>
       <NoticeBar notice={notice} />
     </div>
