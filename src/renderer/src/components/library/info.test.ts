@@ -13,16 +13,21 @@ const meme = (fields: Partial<Meme>): Meme => ({
 
 describe('textInImage', () => {
   it('shows the text read from the image', () => {
-    expect(textInImage(meme({ ocrText: 'monday again' }), false)).toBe('monday again')
+    expect(textInImage(meme({ ocrText: 'monday again' }), false, false)).toBe('monday again')
+    expect(textInImage(meme({ ext: 'mp4', ocrText: 'text' }), false, false)).toBe('text')
   })
 
-  it('says "Reading text…" only on macOS while OCR has not run', () => {
-    expect(textInImage(meme({}), true)).toBe('Reading text…')
-    expect(textInImage(meme({}), false)).toBeNull()
+  it('says "Reading text…" for a still image only on macOS while OCR has not run', () => {
+    expect(textInImage(meme({}), true, false)).toBe('Reading text…')
+    expect(textInImage(meme({}), false, false)).toBeNull()
   })
 
-  it('hides the section when no text was found, and for videos', () => {
-    expect(textInImage(meme({ ocrText: ' ' }), true)).toBeNull()
-    expect(textInImage(meme({ ext: 'mp4', ocrText: 'text' }), true)).toBeNull()
+  it('says "Reading text…" for a video or GIF only while the AI reads it, on every OS', () => {
+    expect(textInImage(meme({ ext: 'mp4' }), false, true)).toBe('Reading text…')
+    expect(textInImage(meme({ ext: 'gif' }), true, false)).toBeNull()
+  })
+
+  it('hides the section when no text was found', () => {
+    expect(textInImage(meme({ ocrText: ' ' }), true, true)).toBeNull()
   })
 })

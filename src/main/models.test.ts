@@ -5,10 +5,11 @@ import type { IpcMainInvokeEvent } from 'electron'
 import { describe, expect, it } from 'vitest'
 import { modelInfo } from '../shared/models'
 import type { Settings } from '../shared/types'
+import { createAi } from './ai'
 import { createAutoTagger } from './autotag'
 import { openLibrary } from './library'
 import { isModelReady, modelHandlers } from './models'
-import { createSemanticSearch, openVectors } from './semantic'
+import { openVectors } from './semantic'
 import { parseSettings } from './settings'
 
 const noop = (): void => undefined
@@ -69,8 +70,17 @@ describe('isModelReady', () => {
         libraryRoot,
         modelDir,
         vectors,
-        autoTagger: createAutoTagger(library, vectors, modelDir, isEnabled, active, noop, noop),
-        semanticSearch: createSemanticSearch(modelDir, vectors, isEnabled, active),
+        autoTagger: createAutoTagger(
+          library,
+          vectors,
+          createAi(),
+          modelDir,
+          isEnabled,
+          active,
+          noop,
+          noop,
+          async () => []
+        ),
         saveSettings: async () => undefined,
         broadcast: noop,
         onLibraryChanged: noop

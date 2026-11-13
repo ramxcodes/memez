@@ -261,6 +261,7 @@ export function LibraryView() {
               key={selected.id}
               meme={selected}
               tagging={autoTag.pending.includes(selected.id)}
+              aiError={autoTag.failed.find((failure) => failure.id === selected.id)?.message}
               onClose={() => setSelectedId(null)}
               onFindSimilar={() => findSimilar(selected)}
               onInfo={show}

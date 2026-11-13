@@ -2,9 +2,10 @@ import { mediaKind, type Meme } from '../shared/types'
 import type { Library } from './library'
 
 /**
- * Reads text in images with Apple Vision (macOS only), one meme at a time.
+ * Reads text in still images with Apple Vision (macOS only), one meme at a time.
  * OCR is best effort: a failure is logged and never blocks saving a meme.
- * Videos are skipped; search them by title and tags.
+ * Videos and GIFs are skipped: the local AI reads their text from frames across the clip
+ * (see autotag.ts), on every OS.
  */
 export function createOcrQueue(library: Library, onDone: () => void) {
   let queue: Promise<void> = Promise.resolve()
@@ -21,7 +22,7 @@ export function createOcrQueue(library: Library, onDone: () => void) {
   }
 
   return (meme: Meme): void => {
-    if (mediaKind(meme.ext) === 'video' || meme.ocrText !== undefined) return
+    if (mediaKind(meme.ext) !== 'image' || meme.ocrText !== undefined) return
     queue = queue.then(() => run(meme))
   }
 }

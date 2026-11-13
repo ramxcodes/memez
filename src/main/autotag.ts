@@ -1,143 +1,93 @@
-import {
-  mediaKind,
-  type AutoTagStatus,
-  type Meme,
-  type MemePatch,
-  type ModelStatus
-} from '../shared/types'
+import { mediaKind, type AutoTagStatus, type Meme, type ModelStatus } from '../shared/types'
 import type { Library } from './library'
 import type { ModelId, ModelRole } from '../shared/models'
-import { AiCrashError, startAiProcess } from './aiProcess'
+import type { Ai } from './ai'
+import { AiCrashError, AiStoppedError } from './aiProcess'
 import type { Vectors } from './semantic'
 
-const UNLOAD_AFTER_MS = 2 * 60_000
 // A crash skips its meme. More crashes in a row than this stop the queue (see `run`).
 const MAX_CRASHES_IN_A_ROW = 2
 
-interface Models {
-  /**
-   * Reads the image at `path`: its CLIP vector for search and, when `suggest` is true,
-   * a title and tags. The caption model is the slow part, so it runs only when asked.
-   */
-  read(
-    path: string,
-    suggest: boolean
-  ): Promise<{ vector: number[]; suggestion: Required<MemePatch> | null }>
-  /** Ends the AI process, which frees all its memory. */
-  dispose(): void
-}
+/** Videos and GIFs: the AI reads frames from across the clip, and reads their text too. */
+const isClip = (meme: Meme): boolean => mediaKind(meme.ext) !== 'image'
 
-/**
- * Starts an AI process and loads both models there (see aiModels.ts). Downloads them first
- * when they are not in `cacheDir`. `onCrash` runs when the process crashes.
- */
-async function loadModels(
-  cacheDir: string,
-  active: Record<ModelRole, ModelId>,
-  onProgress: (fraction: number) => void,
-  onCrash: (error: Error) => void
-): Promise<Models> {
-  const ai = startAiProcess(onProgress, onCrash)
-  try {
-    await ai.call('loadTagModels', cacheDir, active)
-  } catch (error) {
-    ai.stop()
-    throw error
-  }
-  return { read: (path, suggest) => ai.call('read', path, suggest), dispose: ai.stop }
-}
-
-/** One key per pair of active models. Models loaded for another key are out of date. */
+/** One key per pair of active models. A read made with another key is out of date. */
 const modelsKey = (active: Record<ModelRole, ModelId>): string => `${active.caption} ${active.clip}`
+
+const messageOf = (error: unknown): string =>
+  error instanceof Error ? error.message : String(error)
 
 /**
  * Suggests a title and tags for new memes, one at a time, with the local models.
  * It also saves each meme's CLIP vector in `vectors`, for search by meaning.
+ * For videos and GIFs it also saves the text in the frames (Apple Vision reads still images).
  * Best effort, like OCR: a failure is visible in the status and never blocks saving a meme.
- * The models load in their own process when there is work (see aiProcess.ts). The process ends
- * after a quiet time, to free memory. If it crashes, the app keeps running.
- * They follow `activeModels`: after a switch in Settings, the next meme loads the new models.
+ * The models run in the shared AI process `ai` (see ai.ts) and load there when a read first
+ * needs them. If the process crashes, the app keeps running.
+ * They follow `activeModels`: after a switch in Settings, the next meme uses the new models.
  * `isEnabled` is the user's "Local AI" setting; when it is off, nothing new is queued.
  */
 export function createAutoTagger(
-  library: Library,
-  vectors: Vectors,
+  library: Pick<Library, 'list' | 'pathOf' | 'applyAutoTags' | 'setOcrText'>,
+  vectors: Pick<Vectors, 'has' | 'set'>,
+  ai: Ai,
   cacheDir: string,
   isEnabled: () => boolean,
   activeModels: () => Record<ModelRole, ModelId>,
   onStatus: (status: AutoTagStatus) => void,
-  onTagged: () => void
+  onTagged: () => void,
+  /** Frames from across a video or GIF (see frames.ts). Throws when the file cannot be decoded. */
+  grabFrames: (meme: Meme) => Promise<Uint8Array[]>
 ) {
   let model: ModelStatus = { state: 'idle' }
-  let models: { key: string; loaded: Promise<Models> } | null = null
   /**
    * Memes to read, with what to do. `fill`: a title and tags only when the AI has not written
    * them yet, plus the vector. `retag`: a new title and tags even when it has (see applyAutoTags).
    */
   const pending = new Map<string, 'fill' | 'retag'>()
+  /** Memes the AI could not read, with the reason. Shown in Info; cleared once a read works. */
+  const failed = new Map<string, string>()
   let running = false
-  let unloadTimer: ReturnType<typeof setTimeout> | undefined
 
-  const status = (): AutoTagStatus => ({ model, pending: [...pending.keys()] })
+  const status = (): AutoTagStatus => ({
+    model,
+    pending: [...pending.keys()],
+    failed: [...failed].map(([id, message]) => ({ id, message }))
+  })
   const setModel = (next: ModelStatus): void => {
     model = next
     onStatus(status())
   }
 
-  const dispose = (loaded: Promise<Models>): Promise<void> =>
-    loaded.then((m) => m.dispose()).catch((error) => console.warn('Unload failed', error))
+  ai.onProgress((progress) => setModel({ state: 'loading', progress }))
+  // After a crash the next read starts a new process. A stop is not an error, and it must not
+  // hide an error that is on screen.
+  ai.onEnd((crash) => {
+    if (crash) setModel({ state: 'failed', message: crash.message })
+    else if (model.state !== 'failed') setModel({ state: 'idle' })
+  })
 
-  /** The models for the active ids. Loads them, and frees models of other ids. */
-  const getModels = (): Promise<Models> => {
-    const active = activeModels()
-    const key = modelsKey(active)
-    if (models?.key === key) return models.loaded
-    if (models) void dispose(models.loaded)
-    setModel({ state: 'loading', progress: 0 })
-    // An older load that ends after a switch must not change the status of the newer one.
-    const isCurrent = (): boolean => models?.loaded === loaded
-    const onProgress = (progress: number): void => {
-      if (isCurrent()) setModel({ state: 'loading', progress })
-    }
-    // The AI process crashed. The next call starts a new one.
-    const onCrash = (error: Error): void => {
-      if (!isCurrent()) return
-      models = null
-      setModel({ state: 'failed', message: error.message })
-    }
-    const loaded = loadModels(cacheDir, active, onProgress, onCrash).then(
-      (ready) => {
-        if (isCurrent()) setModel({ state: 'ready' })
-        return ready
-      },
-      (error: unknown) => {
-        // An older load's failure says nothing about the newer one.
-        if (!isCurrent()) throw error
-        models = null
-        setModel({
-          state: 'failed',
-          message: error instanceof Error ? error.message : String(error)
-        })
-        throw error
-      }
-    )
-    models = { key, loaded }
-    return loaded
+  const setReady = (): void => {
+    if (model.state !== 'ready') setModel({ state: 'ready' })
   }
 
-  /** Frees the models. Safe to call when they are not loaded. */
-  const unload = async (): Promise<void> => {
-    clearTimeout(unloadTimer)
-    const current = models
-    if (!current || running) return
-    models = null
-    setModel({ state: 'idle' })
-    await dispose(current.loaded)
-  }
-
-  const scheduleUnload = (): void => {
-    clearTimeout(unloadTimer)
-    unloadTimer = setTimeout(() => void unload(), UNLOAD_AFTER_MS)
+  /**
+   * Loads the models a read needs (downloads them first when they are missing). `withCaption`
+   * adds the caption model. A failure here is a broken setup, not one bad meme.
+   */
+  const prepare = async (
+    active: Record<ModelRole, ModelId>,
+    withCaption: boolean
+  ): Promise<void> => {
+    try {
+      await ai.call('prepare', cacheDir, active, withCaption)
+    } catch (error) {
+      // A stop on purpose (Local AI turned off, a model switch) is not a failure to show.
+      if (!(error instanceof AiStoppedError))
+        setModel({ state: 'failed', message: messageOf(error) })
+      throw error
+    }
+    setReady()
   }
 
   const run = async (): Promise<void> => {
@@ -147,19 +97,27 @@ export function createAutoTagger(
     try {
       // A Map visits entries added while the loop runs, so new memes join this pass.
       for (const [id, mode] of pending) {
-        const key = modelsKey(activeModels())
-        // An older load that fails after a model switch says nothing about the new models:
-        // load those instead of dropping the queue.
-        const loaded = await getModels().catch((error: unknown) => {
-          if (modelsKey(activeModels()) !== key) return getModels()
-          throw error
-        })
-        try {
-          const meme = library.list().find((other) => other.id === id)
-          if (meme) {
-            const suggest = mode === 'retag' || !meme.autoTagged
-            const { vector, suggestion } = await loaded.read(library.pathOf(meme), suggest)
-            if (modelsKey(activeModels()) !== key) {
+        const active = activeModels()
+        const meme = library.list().find((other) => other.id === id)
+        if (meme) {
+          const clip = isClip(meme)
+          const options = {
+            suggest: mode === 'retag' || !meme.autoTagged,
+            readText: clip && (mode === 'retag' || meme.ocrText === undefined)
+          }
+          await prepare(active, options.suggest || options.readText)
+          try {
+            const frames = clip ? await grabFrames(meme) : [library.pathOf(meme)]
+            const { vector, suggestion, text } = await ai.call(
+              'read',
+              cacheDir,
+              active,
+              frames,
+              options
+            )
+            // A read loads a model again when a search with other models freed it in between.
+            setReady()
+            if (modelsKey(activeModels()) !== modelsKey(active)) {
               // The user switched models while this meme was read. Read it again with the new
               // ones, at the end of the queue (unless `stop` dropped it).
               if (pending.delete(id)) pending.set(id, mode)
@@ -167,17 +125,20 @@ export function createAutoTagger(
             }
             crashesInARow = 0
             await vectors.set(id, vector)
-            if (suggestion) {
-              await library.applyAutoTags(id, suggestion, mode)
-              onTagged()
-            }
+            if (text !== null) await library.setOcrText(id, text)
+            if (suggestion) await library.applyAutoTags(id, suggestion, mode)
+            if (suggestion || text !== null) onTagged()
+            failed.delete(id)
+          } catch (error) {
+            // This meme stays without `autoTagged`, so it runs again on the next launch.
+            console.warn(`Auto tag failed for ${id}`, error)
+            failed.set(id, messageOf(error))
+            // The AI process crashed on this meme. The next meme starts a new process. Crashes
+            // in a row mean the setup is broken, not one file: stop, so it does not restart
+            // for each.
+            if (error instanceof AiCrashError && ++crashesInARow >= MAX_CRASHES_IN_A_ROW)
+              throw error
           }
-        } catch (error) {
-          // This meme stays without `autoTagged`, so it runs again on the next launch.
-          console.warn(`Auto tag failed for ${id}`, error)
-          // The AI process crashed on this meme. The next meme starts a new process. Crashes in
-          // a row mean the setup is broken, not one file: stop, so it does not restart for each.
-          if (error instanceof AiCrashError && ++crashesInARow >= MAX_CRASHES_IN_A_ROW) throw error
         }
         pending.delete(id)
         onStatus(status())
@@ -190,18 +151,18 @@ export function createAutoTagger(
       onStatus(status())
     } finally {
       running = false
-      if (models) scheduleUnload()
     }
   }
 
   /**
-   * Adds memes with no suggestion or no vector yet. A zip import brings suggestions but not
-   * vectors. Videos are skipped; they have no still frame.
+   * Adds memes with no suggestion or no vector yet, and videos and GIFs whose text is not read
+   * yet. A zip import brings suggestions but not vectors.
    */
   const queue = (memes: Meme[]): void => {
     if (!isEnabled()) return
     const todo = memes.filter(
-      (meme) => mediaKind(meme.ext) !== 'video' && (!meme.autoTagged || !vectors.has(meme.id))
+      (meme) =>
+        !meme.autoTagged || !vectors.has(meme.id) || (isClip(meme) && meme.ocrText === undefined)
     )
     if (todo.length === 0) return
     todo.forEach((meme) => pending.has(meme.id) || pending.set(meme.id, 'fill'))
@@ -214,29 +175,27 @@ export function createAutoTagger(
     queue,
 
     /**
-     * Runs the AI again on `memes` (not videos): a new title and tags even when it wrote them
-     * before. Titles the user wrote stay. The status shows the progress like new memes.
+     * Runs the AI again on `memes`: a new title and tags even when it wrote them before, and for
+     * videos and GIFs their text. Titles the user wrote stay. The status shows the progress.
      */
     retag(memes: Meme[]): void {
-      memes
-        .filter((meme) => mediaKind(meme.ext) !== 'video')
-        .forEach((meme) => pending.set(meme.id, 'retag'))
+      memes.forEach((meme) => pending.set(meme.id, 'retag'))
       onStatus(status())
       void run()
     },
 
     /**
-     * The CLIP image vector of the file at `path`, for search by a dropped image. Loads the models
-     * if needed (they must be downloaded already: loading downloads missing files). It never runs
-     * the slow caption model.
+     * The CLIP image vector of the file at `path`, for search by a dropped image. Loads the CLIP
+     * model if needed (it must be downloaded already: loading downloads missing files). It never
+     * loads or runs the caption model.
      */
     async embed(path: string): Promise<number[]> {
-      const loaded = await getModels()
-      try {
-        return (await loaded.read(path, false)).vector
-      } finally {
-        if (!running) scheduleUnload()
-      }
+      const active = activeModels()
+      await prepare(active, false)
+      const options = { suggest: false, readText: false }
+      const { vector } = await ai.call('read', cacheDir, active, [path], options)
+      setReady()
+      return vector
     },
 
     /**
@@ -257,7 +216,13 @@ export function createAutoTagger(
     /** True while models load or memes are being read. The models folder must not change then. */
     busy: (): boolean => running || model.state === 'loading',
 
-    unload
+    /**
+     * Ends the AI process to free its memory, also for search. The next use loads the active
+     * models. While memes are read it does nothing: the read in flight must finish.
+     */
+    unload(): void {
+      if (!running) ai.stop()
+    }
   }
 }
 

@@ -23,10 +23,12 @@ import { pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
 import { electronApp, optimizer } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
-import { MEDIA_EXTS, mediaKind, type Meme, type MemezIpc } from '../shared/types'
+import { MEDIA_EXTS, mediaFileName, mediaKind, type Meme, type MemezIpc } from '../shared/types'
 import { backupHandlers } from './backup'
 import { exportZip, importZip } from './archive'
+import { createAi } from './ai'
 import { createAutoTagger } from './autotag'
+import { grabFrames } from './frames'
 import { downloadMedia, readClipboardMedia, readFiles } from './ingest'
 import type { Handlers, MainContext } from './ipc'
 import { openLibrary, type Library } from './library'
@@ -196,15 +198,23 @@ async function registerIpc(library: Library, settings: Settings): Promise<void> 
   await vectors.keepOnly(library.list().map((meme) => meme.id))
   const localAi = (): boolean => settings.localAi
   const activeModels = (): Settings['models'] => settings.models
-  semanticSearch = createSemanticSearch(modelDir, vectors, localAi, activeModels)
+  const ai = createAi()
+  semanticSearch = createSemanticSearch(ai, modelDir, vectors, localAi, activeModels)
   const autoTagger = createAutoTagger(
     library,
     vectors,
+    ai,
     modelDir,
     localAi,
     activeModels,
     (status) => broadcast('autotag:status', status),
-    libraryChanged
+    libraryChanged,
+    // Only videos and GIFs come here (see autotag.ts).
+    (meme) =>
+      grabFrames(
+        `meme://media/${mediaFileName(meme)}`,
+        mediaKind(meme.ext) === 'gif' ? 'gif' : 'video'
+      )
   )
 
   const addAll = async (files: Uint8Array[]): ReturnType<MemezIpc['importFiles']> => {
@@ -250,7 +260,6 @@ async function registerIpc(library: Library, settings: Settings): Promise<void> 
     modelDir,
     vectors,
     autoTagger,
-    semanticSearch,
     saveSettings: saveAndBroadcast,
     broadcast,
     onLibraryChanged: (listener) => libraryListeners.push(listener)
@@ -353,7 +362,7 @@ async function registerIpc(library: Library, settings: Settings): Promise<void> 
       if (patch.localAi === false) {
         // Free the memory now; the files stay until the user deletes them.
         autoTagger.stop()
-        await Promise.all([autoTagger.unload(), semanticSearch.unload()])
+        autoTagger.unload()
       }
       return { ...settings }
     },

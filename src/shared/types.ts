@@ -53,6 +53,8 @@ export interface AutoTagStatus {
   model: ModelStatus
   /** Ids of memes that wait for a title and tags. */
   pending: string[]
+  /** Memes the AI could not read (for example a video format this computer cannot play). */
+  failed: { id: string; message: string }[]
 }
 
 /** Backup of the library to a folder (iCloud Drive by default on macOS). The user's choice. */

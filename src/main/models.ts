@@ -2,7 +2,7 @@ import { access, readdir, readFile, rm, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { MODELS, modelInfo, type ModelId, type ModelInfo } from '../shared/models'
 import type { ModelDownload, ModelState } from '../shared/types'
-import { sumProgress } from './aiModels'
+import { SESSION_OPTIONS, sumProgress } from './aiModels'
 import type { Handlers, MainContext } from './ipc'
 import { rankSimilar } from './semantic'
 
@@ -77,7 +77,7 @@ async function fetchModel(
   const ai = await import('@huggingface/transformers')
   ai.env.cacheDir = cacheDir
   const options = { progress_callback: sumProgress(onProgress, model.approxBytes) }
-  const withDtype = { ...options, dtype: model.dtype }
+  const withDtype = { ...options, dtype: model.dtype, session_options: SESSION_OPTIONS }
   const { repo } = model
   const loads =
     model.role === 'caption'
@@ -141,7 +141,7 @@ export function modelHandlers(
   | 'findSimilar'
   | 'searchByImage'
 > {
-  const { library, settings, modelDir, vectors, autoTagger, semanticSearch } = ctx
+  const { library, settings, modelDir, vectors, autoTagger } = ctx
   // Downloads started here, and the last failure. Models not in it are 'ready' or 'none' on disk.
   const jobs = new Map<ModelId, Exclude<ModelDownload, { state: 'none' | 'ready' }>>()
   // One per download, by repo. Cancel aborts it.
@@ -176,11 +176,6 @@ export function modelHandlers(
   const removeFiles = (model: ModelInfo): Promise<void> =>
     rm(modelFolder(modelDir, model), { recursive: true, force: true })
 
-  /** Frees the loaded models, so the next run loads the active ones. */
-  const unloadAll = async (): Promise<void> => {
-    await Promise.all([autoTagger.unload(), semanticSearch.unload()])
-  }
-
   /**
    * Makes `model` the active one for its role. A new CLIP model reads every meme again.
    * Its files are on disk, so an old failure in `jobs` is out of date: it is cleared.
@@ -190,7 +185,7 @@ export function modelHandlers(
     if (settings.models[model.role] === model.id) return changed()
     settings.models = { ...settings.models, [model.role]: model.id }
     await ctx.saveSettings()
-    await unloadAll()
+    autoTagger.unload()
     if (model.role === 'clip') {
       // Old vectors come from the other CLIP model (B/32 has 512 numbers, L/14 has 768).
       await vectors.clear()
@@ -274,7 +269,7 @@ export function modelHandlers(
         settings.localAi = false
         await ctx.saveSettings()
         autoTagger.stop()
-        await unloadAll()
+        autoTagger.unload()
       }
       await removeFiles(model)
       await setJob(id, { state: 'none' })
@@ -288,7 +283,7 @@ export function modelHandlers(
       settings.localAi = false
       await ctx.saveSettings()
       autoTagger.stop()
-      await unloadAll()
+      autoTagger.unload()
       await rm(modelDir, { recursive: true, force: true })
       jobs.clear()
       await changed()
@@ -312,9 +307,8 @@ export function modelHandlers(
     searchByImage: async (_, path) => {
       if (!settings.localAi)
         throw new Error('Turn on smart titles and tags in Settings to search by image.')
-      const active = [modelInfo(settings.models.caption), modelInfo(settings.models.clip)]
-      const ready = await Promise.all(active.map((model) => isModelReady(modelDir, model)))
-      if (!ready.every(Boolean))
+      // Only CLIP reads the image; the caption model is not needed.
+      if (!(await isModelReady(modelDir, modelInfo(settings.models.clip))))
         throw new Error('The AI models are not downloaded yet. Try again when they are ready.')
       return rankSimilar(await autoTagger.embed(path), vectors.entries())
     }

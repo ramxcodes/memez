@@ -2,7 +2,7 @@ import type { IpcMainInvokeEvent } from 'electron'
 import type { MemezIpc, Settings } from '../shared/types'
 import type { AutoTagger } from './autotag'
 import type { Library } from './library'
-import type { SemanticSearch, Vectors } from './semantic'
+import type { Vectors } from './semantic'
 
 /** One main-process handler per `MemezIpc` method. Its name is also the IPC channel name. */
 export type Handlers = {
@@ -24,7 +24,6 @@ export interface MainContext {
   modelDir: string
   vectors: Vectors
   autoTagger: AutoTagger
-  semanticSearch: SemanticSearch
   /** Saves `settings` and tells every window. */
   saveSettings(): Promise<void>
   broadcast(channel: string, ...args: unknown[]): void

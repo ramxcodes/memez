@@ -1,8 +1,7 @@
 import { readFile } from 'node:fs/promises'
 import type { ModelId, ModelRole } from '../shared/models'
-import { startAiProcess } from './aiProcess'
+import type { Ai } from './ai'
 import { writeAtomic } from './library'
-const UNLOAD_AFTER_MS = 5 * 60_000
 
 /**
  * One CLIP image vector per meme, saved in `path` (library root / vectors.json).
@@ -99,66 +98,23 @@ export function rankSimilar(
 /**
  * Search by meaning: "crying" finds a crying cat with no such tag or title.
  * Best effort: before the models are downloaded, or on any failure, it finds nothing.
- * The text model loads on first use, in its own process, and the process ends after a quiet time.
+ * The CLIP text model loads on first use in the shared AI process `ai` (see ai.ts). It never
+ * downloads: the auto tagger owns the download and shows its progress.
  * `isEnabled` is the user's "Local AI" setting; when it is off, it finds nothing.
  */
 export function createSemanticSearch(
+  ai: Ai,
   cacheDir: string,
   vectors: Vectors,
   isEnabled: () => boolean,
   activeModels: () => Record<ModelRole, ModelId>
 ) {
-  // The CLIP text model for queries, in its own AI process (see aiProcess.ts). It never
-  // downloads, so there is no progress. `onCrash` runs when the process crashes.
-  const loadTextModel = (id: ModelId, onCrash: () => void) => {
-    const ai = startAiProcess(() => undefined, onCrash)
-    return ai.call('loadTextModel', cacheDir, id).then(
-      () => ({ embed: (text: string) => ai.call('embedText', text), dispose: ai.stop }),
-      (error: unknown) => {
-        ai.stop()
-        throw error
-      }
-    )
-  }
-
-  let textModel: ReturnType<typeof loadTextModel> | null = null
-  // The CLIP model `textModel` belongs to. A switch in Settings loads the new one on next use.
-  let textModelId: ModelId | null = null
-  let unloadTimer: ReturnType<typeof setTimeout> | undefined
-
-  const unload = async (): Promise<void> => {
-    clearTimeout(unloadTimer)
-    const loaded = textModel
-    textModel = null
-    await loaded?.then((m) => m.dispose()).catch(() => undefined)
-  }
-
-  const getTextModel = (): ReturnType<typeof loadTextModel> => {
-    const id = activeModels().clip
-    if (textModelId !== id) void unload() // Drops the old model at once, frees it in the background.
-    clearTimeout(unloadTimer)
-    unloadTimer = setTimeout(() => void unload(), UNLOAD_AFTER_MS)
-    textModelId = id
-    if (textModel) return textModel
-    // After a failed load or a crash, the next search loads it again.
-    const forget = (): void => {
-      if (textModel === loading) textModel = null
-    }
-    const loading: ReturnType<typeof loadTextModel> = loadTextModel(id, forget).catch(
-      (error: unknown) => {
-        forget()
-        throw error
-      }
-    )
-    textModel = loading
-    return loading
-  }
-
   return {
     /** Loads the text model ahead of time, so the first search is fast. */
     warm(): void {
       if (!isEnabled()) return
-      getTextModel().catch(() => undefined) // Not downloaded yet; search finds nothing for now.
+      // Not downloaded yet: search finds nothing for now.
+      ai.call('loadTextModel', cacheDir, activeModels().clip).catch(() => undefined)
     },
 
     /** Ids of the memes that match `query` by meaning, best first. */
@@ -167,15 +123,14 @@ export function createSemanticSearch(
       if (!isEnabled() || !query.trim() || entries.length === 0) return []
       try {
         // The same wording the tag words use. It ranked the right memes first in tests.
-        const q = await (await getTextModel()).embed(`a picture of ${query.trim()}`)
+        const text = `a picture of ${query.trim()}`
+        const q = await ai.call('embedText', cacheDir, activeModels().clip, text)
         return pickMatches(entries.map(([id, v]) => ({ id, score: dot(v, q) })))
       } catch (error) {
         console.warn('Semantic search failed', error)
         return []
       }
-    },
-
-    unload
+    }
   }
 }
 

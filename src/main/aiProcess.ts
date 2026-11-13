@@ -5,8 +5,12 @@ import type { AiApi, AiMessage, AiRequest } from './aiWorker'
 /** The AI process ended without `stop`: it crashed or the system killed it. */
 export class AiCrashError extends Error {}
 
+/** The AI process was ended on purpose with `stop`. Not a failure of the AI. */
+export class AiStoppedError extends Error {}
+
 /**
- * Starts an AI process (see aiWorker.ts) and returns a way to call it.
+ * Starts an AI process (see aiWorker.ts) and returns a way to call it. The app uses it through
+ * `createAi` (see ai.ts), which keeps one process for all AI work.
  * The models and the image decoder use native code. In the main process a crash there ended
  * the whole app; here it ends only this process. Calls in flight then reject and `onCrash` runs.
  * `stop` ends the process on purpose and frees all its memory; `onCrash` does not run then.
@@ -58,7 +62,7 @@ export function startAiProcess(
 
     stop(): void {
       if (ended) return
-      end(new Error('The AI was stopped.'))
+      end(new AiStoppedError('The AI was stopped.'))
       // Before 'spawn' there is nothing to kill yet (`kill` does nothing): kill it once it starts.
       if (child.pid === undefined) child.once('spawn', () => child.kill())
       else child.kill()

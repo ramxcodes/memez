@@ -7,8 +7,9 @@ from anywhere with a hotkey popup.
 - Types: PNG, JPG, WebP, GIF, MP4, WebM.
 - Search: fuzzy match on tags, title and text in the image (Apple Vision OCR, images only),
   then search by meaning: "crying" finds a crying cat with no such tag.
-- Local AI: each new image or GIF gets a title (if empty) and tags. It never changes what you
-  typed. The models (about 570 MB) download once on first launch into the app data folder;
+- Local AI: each new image, GIF or video gets a title (if empty) and tags. GIFs and videos are
+  read from a few frames across the clip, and the text in them is read too. It never changes
+  what you typed. The models (about 570 MB) download once on first launch into the app data folder;
   the sidebar shows progress. Nothing leaves your Mac.
 
 ## Use

@@ -12,6 +12,8 @@ interface Props {
   meme: Meme
   /** True while the AI writes this meme's title and tags. */
   tagging: boolean
+  /** Why the AI could not read this meme, when it failed. */
+  aiError: string | undefined
   onClose: () => void
   onFindSimilar: () => void
   onInfo: (text: string) => void
@@ -45,11 +47,19 @@ function MetaRow({ label, children }: { label: string; children: ReactNode }) {
  * The AI can fill the title while the panel is open, so the field shows `meme.title` unless
  * the user is editing it.
  */
-export function Inspector({ meme, tagging, onClose, onFindSimilar, onInfo, onError }: Props) {
+export function Inspector({
+  meme,
+  tagging,
+  aiError,
+  onClose,
+  onFindSimilar,
+  onInfo,
+  onError
+}: Props) {
   const [titleField, setTitleField] = useState<TitleField>({ state: 'idle' })
   const [seconds, setSeconds] = useState<number>()
   const kind = mediaKind(meme.ext)
-  const ocr = textInImage(meme, window.api.isMac)
+  const ocr = textInImage(meme, window.api.isMac, tagging)
   const showFile = window.api.isMac ? 'Show in Finder' : 'Show in folder'
 
   const save = (patch: MemePatch): void => {
@@ -131,6 +141,9 @@ export function Inspector({ meme, tagging, onClose, onFindSimilar, onInfo, onErr
         <Section label="Tags">
           <TagInput tags={meme.tags} onChange={(tags) => save({ tags })} />
           {tagging && <p className="text-[11px] text-ash">Suggesting tags…</p>}
+          {!tagging && aiError && (
+            <p className="text-[11px] text-danger">The AI could not read this meme. {aiError}</p>
+          )}
         </Section>
 
         {ocr !== null && (

@@ -80,7 +80,11 @@ export function useSettings(): Settings | null {
 
 /** AI model state and the memes still waiting for a title and tags. */
 export function useAutoTagStatus(): AutoTagStatus {
-  const [status, setStatus] = useState<AutoTagStatus>({ model: { state: 'idle' }, pending: [] })
+  const [status, setStatus] = useState<AutoTagStatus>({
+    model: { state: 'idle' },
+    pending: [],
+    failed: []
+  })
 
   useEffect(() => {
     const unsubscribe = window.api.onAutoTagStatus(setStatus)
