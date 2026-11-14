@@ -14,6 +14,11 @@ files:
   # during the build also changes size while it is packed and breaks app.asar.
   - '!.proof/**'
   - '!raycast/**'
+  # Distro packaging and CI files are not part of the app.
+  - '!packaging/**'
+  - '!.github/**'
+  # The Omarchy shell plugin ships with the app (unpacked, see asarUnpack); its tests do not.
+  - '!omarchy/**/*.test.*'
   - '!electron.vite.config.{js,ts,mjs,cjs}'
   - '!vitest.config.{js,ts,mjs,cjs,mts}'
   - '!{.eslintcache,eslint.config.mjs,.prettierignore,.prettierrc.yaml,dev-app-update.yml,CHANGELOG.md,README.md}'
@@ -34,6 +39,8 @@ files:
   - '!node_modules/onnxruntime-node/bin/napi-v6/darwin/*/libonnxruntime.1.*.*.dylib'
 asarUnpack:
   - resources/**
+  # The Omarchy plugin is copied out of the app by path, so it must be a real folder on disk.
+  - omarchy/**
   # Native AI runtime and image decoder. They load .node and .dylib files from disk.
   - node_modules/onnxruntime-node/**
   - node_modules/sharp/**
@@ -53,9 +60,76 @@ mac:
   entitlementsInherit: build/entitlements.mac.plist
   notarize: false
 linux:
+  # x64 only: the files patterns above keep only the linux-x64 ONNX runtime and sharp.
   target:
-    - AppImage
+    # Any distro.
+    - target: AppImage
+      arch: x64
+    # Arch Linux package for `sudo pacman -U` (see pacman: below).
+    - target: pacman
+      arch: x64
+    # The unpacked app. The AUR memez-bin package installs from it (packaging/arch/memez-bin).
+    - target: tar.gz
+      arch: x64
+  # The command is `memez`, and the icon and desktop file are memez.png and memez.desktop.
+  executableName: memez
+  icon: build/icon.png
   category: Utility
+  synopsis: Local meme library with a hotkey search popup
+  description: >-
+    Local meme library with a hotkey search popup and on-device AI tags. Save a meme once, then
+    paste it into any chat in about two seconds.
+  maintainer: ramxcodes <ramxcodes@users.noreply.github.com>
+  vendor: ramxcodes
+  # The `protocols` above add MimeType=x-scheme-handler/memez; to the desktop entry, and the
+  # app gets memez:// links (and --show / --toggle-popup) as arguments: Exec=... %U.
+  desktop:
+    entry:
+      GenericName: Meme Library
+      Keywords: meme;memes;gif;reaction;sticker;clipboard;paste;
+  # The packages carry the license next to the app (/opt/Memez/LICENSE).
+  extraFiles:
+    - from: LICENSE
+      to: LICENSE
+pacman:
+  # memez-1.0.0-1-x86_64.pkg.tar.zst, the name pacman itself would give it.
+  artifactName: ${name}-${version}-1-x86_64.pkg.tar.zst
+  compression: zstd
+  # electron-builder joins synopsis and description with a newline, which breaks pkgdesc in
+  # .PKGINFO. A later --description wins.
+  fpm:
+    - --description
+    - Local meme library with a hotkey search popup and on-device AI tags
+  # Libraries Electron and the bundled native modules link against. The default list of
+  # electron-builder names packages Arch no longer has (http-parser, libappindicator-gtk3).
+  # Optional tools (wl-clipboard, wtype, xdotool, tesseract, tesseract-data-eng) are optdepends
+  # of the AUR package. fpm drops pacman optdepends (its template reads a different key).
+  depends:
+    - alsa-lib
+    - at-spi2-core
+    - cairo
+    - dbus
+    - expat
+    - gcc-libs
+    - glib2
+    - glibc
+    - gtk3
+    - hicolor-icon-theme
+    - libcups
+    - libx11
+    - libxcb
+    - libxcomposite
+    - libxdamage
+    - libxext
+    - libxfixes
+    - libxkbcommon
+    - libxrandr
+    - mesa
+    - nspr
+    - nss
+    - pango
+    - systemd-libs
+    - xdg-utils
 win:
   target:
     - nsis

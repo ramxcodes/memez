@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { DEFAULT_MODELS } from '../shared/models'
 import type { AutoTagStatus, Meme } from '../shared/types'
 import { createAi } from './ai'
+import type { Frame } from './aiModels'
 import { AiCrashError, startAiProcess } from './aiProcess'
 import { createAutoTagger } from './autotag'
 import { openLibrary } from './library'
@@ -48,10 +49,20 @@ function fakeAi(outcomes: ('ok' | 'crash')[] = []): { started: () => number; rea
 
 const PNG = [0x89, 0x50, 0x4e, 0x47]
 const GIF = [0x47, 0x49, 0x46, 0x38]
-const FRAMES = [new Uint8Array([1]), new Uint8Array([2])]
+const pixel = (value: number): Frame => ({
+  width: 1,
+  height: 1,
+  data: new Uint8Array(4).fill(value)
+})
+const FRAMES = [pixel(1), pixel(2)]
+const STILL = [pixel(3)]
+
+/** Decodes like frames.ts: a few frames for a video or GIF, one for a still image or a path. */
+const fakeFrames = async (item: Meme | string): Promise<Frame[]> =>
+  typeof item !== 'string' && item.ext === 'gif' ? FRAMES : STILL
 
 /** Runs the tagger on new memes made from `files` and waits until the queue is empty. */
-async function tag(files: number[][], grabFrames = async (): Promise<Uint8Array[]> => FRAMES) {
+async function tag(files: number[][], readFrames = fakeFrames) {
   const root = await mkdtemp(join(tmpdir(), 'memez-'))
   const library = await openLibrary(root)
   for (const bytes of files) await library.add(new Uint8Array(bytes))
@@ -66,7 +77,7 @@ async function tag(files: number[][], grabFrames = async (): Promise<Uint8Array[
     () => DEFAULT_MODELS,
     (next) => (status = next),
     () => undefined,
-    grabFrames
+    readFrames
   )
   tagger.start()
   await vi.waitFor(() => expect(tagger.busy() || status?.pending.length).toBeFalsy())
@@ -121,11 +132,48 @@ describe('createAutoTagger on a GIF or video', () => {
     expect(vectors.has(memes[0].id)).toBe(false)
   })
 
-  it('reads a still image from its file, with no text (Apple Vision reads that)', async () => {
+  it('reads a still image as one decoded frame, with no text (Apple Vision reads that)', async () => {
     const ai = fakeAi()
     const { memes } = await tag([[...PNG, 1]])
-    expect(ai.reads[0].options).toEqual({ suggest: true, readText: false })
-    expect(ai.reads[0].frames).toHaveLength(1)
+    expect(ai.reads).toEqual([{ frames: STILL, options: { suggest: true, readText: false } }])
     expect(memes[0].ocrText).toBeUndefined()
+  })
+
+  it('shows why a still image could not be decoded, and saves nothing for it', async () => {
+    const ai = fakeAi()
+    const { memes, status } = await tag([[...PNG, 1]], async () => {
+      throw new Error('This image could not be decoded.')
+    })
+    expect(ai.reads).toEqual([])
+    expect(status?.failed).toEqual([
+      { id: memes[0].id, message: 'This image could not be decoded.' }
+    ])
+    expect(memes[0].autoTagged).toBeFalsy()
+  })
+})
+
+describe('createAutoTagger.embed', () => {
+  it('decodes the dropped file with the frame reader, and sends its pixels to the AI', async () => {
+    const ai = fakeAi()
+    const root = await mkdtemp(join(tmpdir(), 'memez-'))
+    const decoded: (Meme | string)[] = []
+    const tagger = createAutoTagger(
+      await openLibrary(root),
+      await openVectors(join(root, 'vectors.json')),
+      createAi(),
+      root,
+      () => true,
+      () => DEFAULT_MODELS,
+      () => undefined,
+      () => undefined,
+      async (item) => {
+        decoded.push(item)
+        return STILL
+      }
+    )
+    expect(await tagger.embed('/somewhere/dropped.webp')).toEqual([1, 0])
+    tagger.unload()
+    expect(decoded).toEqual(['/somewhere/dropped.webp'])
+    expect(ai.reads).toEqual([{ frames: STILL, options: { suggest: false, readText: false } }])
   })
 })

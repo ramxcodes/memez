@@ -9,5 +9,5 @@ export default defineConfig({
       load: (id) => (id.endsWith('?modulePath') ? `export default ${JSON.stringify(id)}` : null)
     }
   ],
-  test: { include: ['src/**/*.test.ts', 'raycast/src/**/*.test.ts'] }
+  test: { include: ['src/**/*.test.ts', 'raycast/src/**/*.test.ts', 'omarchy/**/*.test.ts'] }
 })

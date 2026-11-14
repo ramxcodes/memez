@@ -3,6 +3,7 @@ import type { MemePatch } from '../shared/types'
 import { normalizeTags } from './library'
 import { modelInfo, type ModelId, type ModelRole } from '../shared/models'
 import { meanVector, mergeTextLines, typicalFrame } from './clip'
+import { loadTransformers } from './rawImage'
 
 // The model code. It runs in the AI process (see aiWorker.ts), never in the app's main process:
 // a native crash in the model runtime or the image decoder must not end the app.
@@ -13,6 +14,8 @@ import { meanVector, mergeTextLines, typicalFrame } from './clip'
 // vector also powers search by meaning (see semantic.ts), so both use the same model.
 // fp16 keeps CLIP's accuracy; 8-bit CLIP gave noisy tags in our tests.
 // Videos and GIFs are read from a few frames across the whole clip (see clip.ts, frames.ts).
+// Images come in as pixels that Chromium decoded in the main process (frames.ts): the AI process
+// never decodes a file, and never uses sharp (see rawImage.ts).
 // The caption model also reads their text, on every OS; still images use Apple Vision (ocr.ts).
 // Audio is not read.
 
@@ -119,16 +122,34 @@ export function sumProgress(onProgress: (fraction: number) => void, expectedByte
  */
 export const SESSION_OPTIONS = { enableCpuMemArena: false, enableMemPattern: false }
 
-/** A still image file path, or one frame of a clip as JPEG bytes. */
-export type Frame = string | Uint8Array
+/**
+ * One picture for the AI: a still image, or one frame of a clip. RGBA pixels, row by row, as
+ * Chromium decoded them (see frames.ts).
+ */
+export interface Frame {
+  width: number
+  height: number
+  data: Uint8Array
+}
 
 /** What `from_pretrained` gets for a load: download progress, or `local_files_only`. */
 type LoadOptions = { progress_callback?: (info: ProgressInfo) => void; local_files_only?: boolean }
 
 const library = async (cacheDir: string) => {
-  const ai = await import('@huggingface/transformers')
+  const ai = await loadTransformers()
   ai.env.cacheDir = cacheDir
   return ai
+}
+
+/** `frame` as the RGB image the processors read: the models have no alpha channel. */
+export const rawImageOf = (
+  ai: Pick<Awaited<ReturnType<typeof loadTransformers>>, 'RawImage'>,
+  frame: Frame
+): RawImage => {
+  const { data, width, height } = frame
+  if (data.length !== width * height * 4) throw new Error('This picture could not be read.')
+  const rgba = new Uint8ClampedArray(data.buffer, data.byteOffset, data.byteLength)
+  return new ai.RawImage(rgba, width, height, 4).rgb()
 }
 
 /** The caption model (Florence-2). `task` is '<CAPTION>' for a title or '<OCR>' for text. */
@@ -321,12 +342,8 @@ export function createModels(onProgress: (fraction: number) => void) {
     ): Promise<{ vector: number[]; suggestion: Required<MemePatch> | null; text: string | null }> =>
       inTurn(async () => {
         const models = await load(cacheDir, active, suggest || readText)
-        const { RawImage } = await library(cacheDir)
-        const images = await Promise.all(
-          frames.map((frame) =>
-            RawImage.read(typeof frame === 'string' ? frame : new Blob([Buffer.from(frame)]))
-          )
-        )
+        const ai = await library(cacheDir)
+        const images = frames.map((frame) => rawImageOf(ai, frame))
         // One frame at a time, never a batch: a batch needs one large block of memory.
         const vectors: number[][] = []
         for (const image of images) vectors.push(await models.image.embed(image))

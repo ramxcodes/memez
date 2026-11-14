@@ -99,6 +99,22 @@ export interface ModelState {
   bytes: number
 }
 
+/** Text reading for still images on this device: Apple Vision (macOS), Tesseract (Linux). */
+export type StillImageOcr = 'available' | 'missing' | 'unsupported'
+
+/** What this desktop offers, for Settings and Info. The Linux fields are null elsewhere. */
+export interface DesktopSupport {
+  /** Linux display session. */
+  session: 'wayland' | 'x11' | null
+  /** Linux: the tool that presses paste for the user (wtype on Wayland, xdotool on X11). */
+  pasteTool: 'wtype' | 'xdotool' | null
+  /** Linux: true when `pasteTool` is installed. */
+  pasteToolInstalled: boolean
+  stillImageOcr: StillImageOcr
+  /** Linux: a command that shows or hides the popup, to bind to a key in the window manager. */
+  toggleCommand: string | null
+}
+
 export type MediaKind = 'image' | 'gif' | 'video'
 
 export function mediaKind(ext: MediaExt): MediaKind {
@@ -118,7 +134,8 @@ export interface MemezIpc {
   copy(id: string): Promise<void>
   /**
    * Copies the meme, hides the popup and pastes into the app behind it.
-   * Falls back to copy only when macOS does not allow Memez to send keystrokes.
+   * Falls back to copy only when macOS does not allow Memez to send keystrokes, or Linux has
+   * no wtype (Wayland) or xdotool (X11).
    */
   paste(id: string): Promise<void>
   reveal(id: string): Promise<void>
@@ -166,8 +183,12 @@ export interface MemezIpc {
   showFolder(folder: 'library' | 'models'): Promise<void>
   /** The library folder for display, like `~/Memez`. */
   getLibraryFolder(): Promise<string>
-  /** macOS: true when Memez may press ⌘V for the user (Accessibility). True elsewhere. */
+  /**
+   * macOS: true when Memez may press ⌘V for the user (Accessibility). Linux: true when the paste
+   * tool (wtype or xdotool) is installed. True on Windows.
+   */
   canPaste(): Promise<boolean>
+  getDesktopSupport(): Promise<DesktopSupport>
   openPasteAccess(): Promise<void>
   /** Ids of memes that match `query` by what is in the image, best first. Best effort. */
   semanticSearch(query: string): Promise<string[]>
@@ -182,6 +203,7 @@ export interface MemezIpc {
 
 export interface MemezApi extends MemezIpc {
   isMac: boolean
+  isLinux: boolean
   /** Real disk path of a dropped `File`. Empty string when the file has no path. */
   pathForFile(file: File): string
   /** Runs `listener` each time the library changes. Returns an unsubscribe function. */

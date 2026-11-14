@@ -1,0 +1,13 @@
+{
+  "search": "Search memes",
+  "recent": "Recently used",
+  "results": { "one": "%1 meme", "other": "%1 memes" },
+  "untitled": "Untitled",
+  "gif": "GIF",
+  "video": "Video",
+  "empty": "No memes yet",
+  "emptyHint": "Add memes in the Memez app. Library: %1",
+  "noMatches": "No memes match \"%1\"",
+  "badLibrary": "Cannot read the library",
+  "hints": "Enter paste · Shift+Enter copy · Alt+Enter open · Ctrl+1–9 paste by position"
+}

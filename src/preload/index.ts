@@ -15,6 +15,7 @@ const subscribe = (channel: string, listener: () => void): (() => void) => {
 
 const api: MemezApi = {
   isMac: process.platform === 'darwin',
+  isLinux: process.platform === 'linux',
   list: () => invoke('list'),
   importClipboard: () => invoke('importClipboard'),
   importFiles: (paths) => invoke('importFiles', paths),
@@ -53,6 +54,7 @@ const api: MemezApi = {
   showFolder: (folder) => invoke('showFolder', folder),
   getLibraryFolder: () => invoke('getLibraryFolder'),
   canPaste: () => invoke('canPaste'),
+  getDesktopSupport: () => invoke('getDesktopSupport'),
   openPasteAccess: () => invoke('openPasteAccess'),
   retryAutoTag: () => invoke('retryAutoTag'),
   isRaycastInstalled: () => invoke('isRaycastInstalled'),

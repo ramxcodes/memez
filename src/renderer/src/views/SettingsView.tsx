@@ -5,6 +5,7 @@ import {
   Download,
   FolderOpen,
   Images,
+  Keyboard,
   Search,
   Upload
 } from 'lucide-react'
@@ -14,7 +15,7 @@ import { HotkeyRow } from '../components/settings/HotkeyRow'
 import { ModelsSection } from '../components/ModelsSection'
 import { NoticeBar } from '../components/NoticeBar'
 import { Card, IconTile, Pill, Row, Segmented } from '../components/ui'
-import { useLibrary, useNotice, useSettings } from '../lib/hooks'
+import { useDesktopSupport, useLibrary, useNotice, useSettings } from '../lib/hooks'
 
 const PASTE_MODES = [
   { value: 'paste', label: 'Paste it' },
@@ -40,10 +41,25 @@ function RowText({ title, children }: { title: string; children?: ReactNode }) {
   )
 }
 
+/** A shell command, selectable, with a Copy button. */
+function CommandRow({ command, onCopy }: { command: string; onCopy: () => void }) {
+  return (
+    <div className="flex items-center gap-2">
+      <code className="min-w-0 flex-1 truncate rounded-md bg-surface-2 px-2 py-1 font-mono text-[11px] select-text">
+        {command}
+      </code>
+      <Pill size="sm" onClick={onCopy}>
+        Copy
+      </Pill>
+    </div>
+  )
+}
+
 /** The Settings window (⌘,): quick search, local AI models, library and backup, Raycast. */
 export function SettingsView() {
   const { notice, show, fail } = useNotice()
   const settings = useSettings()
+  const desktop = useDesktopSupport()
   const memes = useLibrary(fail)
   const [folder, setFolder] = useState('')
   const [canPaste, setCanPaste] = useState(true)
@@ -69,6 +85,17 @@ export function SettingsView() {
   }, [fail])
 
   if (!settings) return null
+
+  const copyText = (text: string): void => {
+    navigator.clipboard.writeText(text).then(() => show('Copied.'), fail)
+  }
+  // Pasting for the user: macOS with Accessibility access, Linux with wtype or xdotool.
+  const pasteSetting = window.api.isMac || window.api.isLinux
+  const pasteNeeds = window.api.isMac
+    ? 'Pasting needs accessibility access.'
+    : desktop?.pasteTool
+      ? `Pasting uses ${desktop.pasteTool} to press Shift+Insert.`
+      : 'Pasting needs wtype (Wayland) or xdotool (X11).'
 
   const exportZip = async (): Promise<void> => {
     const path = await window.api.exportZip()
@@ -99,20 +126,20 @@ export function SettingsView() {
   return (
     <div className="flex h-full flex-col bg-surface">
       {/* Room for the macOS window buttons; drags the window everywhere. */}
-      <div className="drag-region h-11 shrink-0" />
+      <div className={`drag-region shrink-0 ${window.api.isMac ? 'h-11' : 'h-4'}`} />
 
       <div className="flex flex-1 flex-col gap-[22px] overflow-y-auto px-7 pt-1 pb-7">
         <h1 className="text-[26px] leading-tight font-bold tracking-[-0.022em]">Settings</h1>
 
         <Section title="Quick search">
           <HotkeyRow onError={fail} />
-          {/* Linux and Windows can only copy (see the paste handler in main/index.ts). */}
-          {window.api.isMac && (
+          {/* Windows can only copy (see the paste handler in main/index.ts). */}
+          {pasteSetting && (
             <Row>
               <IconTile color="orange">
                 <Clipboard size={16} />
               </IconTile>
-              <RowText title="When you pick a meme">Pasting needs accessibility access.</RowText>
+              <RowText title="When you pick a meme">{pasteNeeds}</RowText>
               <Segmented
                 label="When you pick a meme"
                 options={PASTE_MODES}
@@ -133,6 +160,47 @@ export function SettingsView() {
               <Pill size="sm" onClick={() => window.api.openPasteAccess().catch(fail)}>
                 Allow…
               </Pill>
+            </Row>
+          )}
+          {window.api.isLinux && settings.pasteMode === 'paste' && !canPaste && (
+            <Row>
+              <span className="flex size-7 shrink-0 items-center justify-center self-start">
+                <CircleAlert size={18} className="text-danger" />
+              </span>
+              <div className="flex min-w-0 flex-1 flex-col gap-1.5 text-[12px] text-mute">
+                {desktop?.pasteTool ? (
+                  <>
+                    <p>
+                      To paste for you, Memez needs {desktop.pasteTool}. Until then it only copies,
+                      and you paste with Ctrl+V. Install it:
+                    </p>
+                    <CommandRow
+                      command={`sudo pacman -S ${desktop.pasteTool}`}
+                      onCopy={() => copyText(`sudo pacman -S ${desktop.pasteTool}`)}
+                    />
+                  </>
+                ) : (
+                  <p>Memez cannot find a Wayland or X11 session, so it only copies.</p>
+                )}
+              </div>
+            </Row>
+          )}
+          {window.api.isLinux && desktop?.toggleCommand && (
+            <Row>
+              <IconTile color="indigo">
+                <Keyboard size={16} />
+              </IconTile>
+              <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+                <RowText title="Window manager key">
+                  {desktop.session === 'wayland'
+                    ? 'The surest way on Wayland. In Hyprland, Sway or your desktop’s keyboard settings, bind a key to:'
+                    : 'Or bind a key to this in your window manager:'}
+                </RowText>
+                <CommandRow
+                  command={desktop.toggleCommand}
+                  onCopy={() => copyText(desktop.toggleCommand ?? '')}
+                />
+              </div>
             </Row>
           )}
         </Section>

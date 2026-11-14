@@ -6,3 +6,5 @@ tsconfig.json
 tsconfig.*.json
 raycast/raycast-env.d.ts
 resources/raycast
+omarchy/**/*.js
+omarchy/**/*.qml
