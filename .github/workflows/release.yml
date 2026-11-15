@@ -18,9 +18,16 @@ jobs:
           - os: macos-latest
             script: build:mac
             files: dist/*.zip
+          # Linux: the AppImage (any distro), the Arch package (memez-<version>-1-x86_64.pkg.tar.zst)
+          # and the unpacked app (Memez-<version>-linux-x64.tar.gz) that the AUR memez-bin
+          # package installs. SHA256SUMS-linux.txt has the checksums for the AUR PKGBUILD.
           - os: ubuntu-latest
             script: build:linux
-            files: dist/*.AppImage
+            files: |
+              dist/*.AppImage
+              dist/*.pkg.tar.zst
+              dist/*.tar.gz
+              dist/SHA256SUMS-linux.txt
           - os: windows-latest
             script: build:win
             files: dist/*.exe
@@ -31,11 +38,17 @@ jobs:
         with:
           node-version: 24
           cache: npm
+      # The pacman package is made by fpm, which needs bsdtar and zstd.
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libarchive-tools zstd
       - run: npm ci
       # Only the macOS app carries the Raycast extension.
       - if: runner.os == 'macOS'
         run: npm --prefix raycast ci
       - run: npm run ${{ matrix.script }} -- --publish never
+      - if: runner.os == 'Linux'
+        working-directory: dist
+        run: sha256sum *.AppImage *.pkg.tar.zst *.tar.gz | tee SHA256SUMS-linux.txt
       - uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true

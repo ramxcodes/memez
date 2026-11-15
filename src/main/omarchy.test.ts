@@ -32,6 +32,11 @@ describe('Omarchy key binding', () => {
 
   it('sees when Super+Ctrl+M is already taken', () => {
     expect(keyTaken([{ modmask: 68, key: 'M' }])).toBe(true)
-    expect(keyTaken([{ modmask: 64, key: 'M' }, { modmask: 68, key: 'V' }])).toBe(false)
+    expect(
+      keyTaken([
+        { modmask: 64, key: 'M' },
+        { modmask: 68, key: 'V' }
+      ])
+    ).toBe(false)
   })
 })

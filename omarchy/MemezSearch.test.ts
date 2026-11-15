@@ -43,7 +43,11 @@ describe('parseLibrary', () => {
 describe('recent memes', () => {
   it('reads only valid ids and times', () => {
     const recent = search.parseRecent(
-      JSON.stringify({ '00000000000000a1': '2026-02-01T00:00:00.000Z', bad: 'x', '00000000000000b2': 7 })
+      JSON.stringify({
+        '00000000000000a1': '2026-02-01T00:00:00.000Z',
+        bad: 'x',
+        '00000000000000b2': 7
+      })
     )
     expect(recent).toEqual({ '00000000000000a1': '2026-02-01T00:00:00.000Z' })
     expect(search.parseRecent('garbage')).toEqual({})

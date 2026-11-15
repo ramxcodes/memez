@@ -199,7 +199,20 @@ export interface MemezIpc {
   /** Copies the extension into Raycast. Fails when Raycast is not installed. */
   installRaycast(): Promise<void>
   removeRaycast(): Promise<void>
+  /** True on an Omarchy desktop (Linux with the Omarchy shell). */
+  hasOmarchy(): Promise<boolean>
+  /** True when the Memez plugin is in the Omarchy shell. */
+  isOmarchyInstalled(): Promise<boolean>
+  /** Adds the plugin to the Omarchy shell and binds a key to it. Says what happened to the key. */
+  installOmarchy(): Promise<OmarchyBinding>
+  removeOmarchy(): Promise<void>
 }
+
+/**
+ * The Omarchy key binding after an install: `added` (Super+Ctrl+M), `existing` (already bound to
+ * Memez), `taken` (Super+Ctrl+M does something else), `no-config` (no Hyprland bindings.lua).
+ */
+export type OmarchyBinding = 'added' | 'existing' | 'taken' | 'no-config'
 
 export interface MemezApi extends MemezIpc {
   isMac: boolean

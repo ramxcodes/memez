@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { choosePasteTool, findExecutable, launchCommand, linuxSession, pasteToolFor } from './linux'
+import {
+  choosePasteTool,
+  findExecutable,
+  launchCommand,
+  linuxSession,
+  pasteToolFor,
+  waylandClipboardPlan
+} from './linux'
 
 describe('linuxSession', () => {
   it('prefers Wayland, then X11, and is null off Linux', () => {
@@ -86,5 +93,24 @@ describe('launchCommand', () => {
         '/usr/bin/memez'
       )
     ).toBe('/src/node_modules/electron/dist/electron /src --toggle-popup')
+  })
+})
+
+describe('waylandClipboardPlan', () => {
+  it('reads files, text and the best image type a Wayland clipboard offers', () => {
+    expect(
+      waylandClipboardPlan(['text/uri-list', 'image/png', 'application/vnd.portal.files'])
+    ).toEqual({ uriList: true, text: false, image: 'image/png' })
+    // A browser image copy: HTML, text and image data. GIF beats a PNG rendering of it.
+    expect(waylandClipboardPlan(['text/html', 'image/png', 'image/gif'])).toEqual({
+      uriList: false,
+      text: false,
+      image: 'image/gif'
+    })
+    expect(waylandClipboardPlan(['text/plain;charset=utf-8', 'UTF8_STRING'])).toEqual({
+      uriList: false,
+      text: true,
+      image: null
+    })
   })
 })

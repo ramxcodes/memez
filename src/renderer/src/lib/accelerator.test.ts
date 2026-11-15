@@ -18,6 +18,11 @@ describe('toAccelerator', () => {
     expect(toAccelerator(press('Space', { ctrl: true }))).toBe('Control+Space')
   })
 
+  it('names the Super key Super off macOS, where Electron ignores Command', () => {
+    expect(toAccelerator(press('KeyM', { meta: true, shift: true }), false)).toBe('Super+Shift+M')
+    expect(acceleratorKeys('Super+Shift+M', false)).toEqual(['Super', 'Shift', 'M'])
+  })
+
   it('waits for a normal key with a modifier', () => {
     expect(toAccelerator(press('KeyM', {}))).toBeNull()
     expect(toAccelerator(press('ShiftLeft', { shift: true }))).toBeNull()

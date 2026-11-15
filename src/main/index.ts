@@ -41,12 +41,20 @@ import {
   linuxSession,
   pasteToolFor,
   pressPaste,
+  readWaylandClipboardMedia,
   waylandClipboardTypes,
   wlCopy
 } from './linux'
 import { modelHandlers } from './models'
 import { createOcrQueue, decodeStill, stillImageOcr } from './ocr'
 import { installRaycast, isRaycastInstalled, removeRaycast, updateRaycast } from './raycast'
+import {
+  hasOmarchy,
+  installOmarchy,
+  isOmarchyInstalled,
+  removeOmarchy,
+  updateOmarchy
+} from './omarchy'
 import { createSemanticSearch, openVectors } from './semantic'
 import { loadSettings, saveSettings, type Settings } from './settings'
 import { createLibraryWindow, createPopupWindow, createSettingsWindow, showPopup } from './windows'
@@ -194,10 +202,15 @@ async function copyMeme(library: Library, meme: Meme): Promise<void> {
 async function checkWaylandClipboard(uri: string, png: Buffer | null): Promise<void> {
   const wlPaste = findExecutable('wl-paste')
   if (!wlPaste) return // Nothing to check with.
-  for (const wait of [0, 40, 120]) {
-    await new Promise((resolve) => setTimeout(resolve, wait))
+  const start = Date.now()
+  // Chromium sets the selection a moment after `clipboard.write` resolves.
+  while (Date.now() - start < 800) {
     const types = await waylandClipboardTypes(wlPaste)
-    if (types?.includes('text/uri-list') && (await waylandUriList(wlPaste)) === uri) return
+    if (types?.includes('text/uri-list') && (await waylandUriList(wlPaste)) === uri) {
+      console.log(`clipboard: Electron took the Wayland clipboard after ${Date.now() - start} ms`)
+      return
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50))
   }
   const copier = findExecutable('wl-copy')
   if (!copier) throw new Error('Could not copy the meme. Install wl-clipboard: it has wl-copy.')
@@ -232,6 +245,16 @@ for (const keyDown of [true, false]) {
   $.CGEventSetFlags(event, 0x100000)
   $.CGEventPost(0, event)
 }`
+
+/**
+ * The meme on the clipboard, for `memez://add`. On Wayland no Memez window has focus when a
+ * link comes, so Chromium cannot see the clipboard: read it with wl-paste instead.
+ */
+async function readClipboardForLink(): Promise<Uint8Array[]> {
+  const wlPaste = SESSION === 'wayland' ? findExecutable('wl-paste') : null
+  if (!wlPaste) return readClipboardMedia()
+  return readWaylandClipboardMedia(wlPaste, { readFiles, downloadMedia })
+}
 
 /** Linux: the tool that presses paste here, or null when it is not installed. */
 const linuxPasteTool = (): ReturnType<typeof choosePasteTool> =>
@@ -333,7 +356,7 @@ async function registerIpc(library: Library, settings: Settings): Promise<void> 
         libraryChanged()
         return
       }
-      const results = await addAll(await readClipboardMedia())
+      const results = await addAll(await readClipboardForLink())
       const added = results.filter((result) => !result.duplicate).length
       new Notification({
         title: added > 0 ? 'Added to Memez' : 'Already in Memez',
@@ -391,9 +414,11 @@ async function registerIpc(library: Library, settings: Settings): Promise<void> 
       await library.markUsed(id)
       libraryChanged()
       popup.hide()
-      // Copy only: the user chose it in Settings, or this system cannot paste for us (Windows,
-      // Linux without wtype or xdotool: Settings says what to install).
-      if (settings.pasteMode === 'copy' || !canPasteHere()) return
+      // Copy only: the user chose it in Settings, or this system cannot paste for us (Windows;
+      // Linux without wtype or xdotool, where Settings says what to install). macOS without
+      // Accessibility access goes on, to say so in a notification.
+      if (settings.pasteMode === 'copy' || process.platform === 'win32') return
+      if (process.platform === 'linux' && !canPasteHere()) return
       // Wait for focus to go back to the app behind the popup.
       await new Promise((resolve) => setTimeout(resolve, process.platform === 'linux' ? 150 : 120))
       try {
@@ -508,6 +533,10 @@ async function registerIpc(library: Library, settings: Settings): Promise<void> 
     isRaycastInstalled: async () => isRaycastInstalled(),
     installRaycast: async () => installRaycast(),
     removeRaycast: async () => removeRaycast(),
+    hasOmarchy: async () => hasOmarchy(),
+    isOmarchyInstalled: async () => isOmarchyInstalled(),
+    installOmarchy: async () => installOmarchy(LIBRARY_ROOT),
+    removeOmarchy: async () => removeOmarchy(),
     renameTag: async (_, from, to) => {
       await library.renameTag(from, to)
       libraryChanged()
@@ -595,6 +624,7 @@ app.whenReady().then(async () => {
 
   // Best effort: an old extension still works, so a failed update must not stop the app.
   updateRaycast().catch((error) => console.warn('Raycast extension update failed', error))
+  updateOmarchy(LIBRARY_ROOT).catch((error) => console.warn('Omarchy plugin update failed', error))
 })
 
 app.on('will-quit', () => globalShortcut.unregisterAll())

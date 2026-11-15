@@ -5,9 +5,7 @@
   "version": "1.0.0",
   "author": "ramxcodes",
   "description": "Search your Memez library and paste a meme into the app in front",
-  "kinds": [
-    "overlay"
-  ],
+  "kinds": ["overlay"],
   "keepLoaded": true,
   "entryPoints": {
     "overlay": "Memez.qml"

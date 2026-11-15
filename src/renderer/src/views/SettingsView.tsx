@@ -6,6 +6,7 @@ import {
   FolderOpen,
   Images,
   Keyboard,
+  LayoutGrid,
   Search,
   Upload
 } from 'lucide-react'
@@ -16,6 +17,14 @@ import { ModelsSection } from '../components/ModelsSection'
 import { NoticeBar } from '../components/NoticeBar'
 import { Card, IconTile, Pill, Row, Segmented } from '../components/ui'
 import { useDesktopSupport, useLibrary, useNotice, useSettings } from '../lib/hooks'
+
+/** What Settings says after installing the Omarchy plugin, by what happened to the key. */
+const OMARCHY_INSTALLED = {
+  added: 'Installed. Press Super+Ctrl+M to search memes.',
+  existing: 'Installed. Your key for Memez still works.',
+  taken: 'Installed. Super+Ctrl+M is taken: bind a key to omarchy-shell shell toggle memez.',
+  'no-config': 'Installed. Bind a key to omarchy-shell shell toggle memez.'
+} as const
 
 const PASTE_MODES = [
   { value: 'paste', label: 'Paste it' },
@@ -45,7 +54,10 @@ function RowText({ title, children }: { title: string; children?: ReactNode }) {
 function CommandRow({ command, onCopy }: { command: string; onCopy: () => void }) {
   return (
     <div className="flex items-center gap-2">
-      <code className="min-w-0 flex-1 truncate rounded-md bg-surface-2 px-2 py-1 font-mono text-[11px] select-text">
+      <code
+        title={command}
+        className="min-w-0 flex-1 truncate rounded-md bg-surface-2 px-2 py-1 font-mono text-[11px] select-text"
+      >
         {command}
       </code>
       <Pill size="sm" onClick={onCopy}>
@@ -55,7 +67,10 @@ function CommandRow({ command, onCopy }: { command: string; onCopy: () => void }
   )
 }
 
-/** The Settings window (⌘,): quick search, local AI models, library and backup, Raycast. */
+/**
+ * The Settings window (⌘,): quick search, local AI models, library and backup, and the add-ons:
+ * Raycast on macOS, the Omarchy shell plugin on Omarchy.
+ */
 export function SettingsView() {
   const { notice, show, fail } = useNotice()
   const settings = useSettings()
@@ -65,6 +80,8 @@ export function SettingsView() {
   const [canPaste, setCanPaste] = useState(true)
   // null until known, and while installing or removing.
   const [raycast, setRaycast] = useState<boolean | null>(null)
+  // Omarchy desktops only. `installed` is null until known, and while installing or removing.
+  const [omarchy, setOmarchy] = useState<{ installed: boolean | null } | null>(null)
 
   useEffect(() => {
     window.api.getLibraryFolder().then(setFolder, fail)
@@ -72,6 +89,14 @@ export function SettingsView() {
 
   useEffect(() => {
     if (window.api.isMac) window.api.isRaycastInstalled().then(setRaycast, fail)
+  }, [fail])
+
+  useEffect(() => {
+    if (!window.api.isLinux) return
+    window.api
+      .hasOmarchy()
+      .then((has) => (has ? window.api.isOmarchyInstalled() : null))
+      .then((installed) => setOmarchy(installed === null ? null : { installed }), fail)
   }, [fail])
 
   // The user grants paste access in System Settings, then comes back here: check again.
@@ -93,9 +118,11 @@ export function SettingsView() {
   const pasteSetting = window.api.isMac || window.api.isLinux
   const pasteNeeds = window.api.isMac
     ? 'Pasting needs accessibility access.'
-    : desktop?.pasteTool
-      ? `Pasting uses ${desktop.pasteTool} to press Shift+Insert.`
-      : 'Pasting needs wtype (Wayland) or xdotool (X11).'
+    : !desktop?.pasteTool
+      ? 'Pasting needs wtype (Wayland) or xdotool (X11).'
+      : desktop.pasteToolInstalled
+        ? `Pasting uses ${desktop.pasteTool} to press Shift+Insert.`
+        : `Pasting needs ${desktop.pasteTool}.`
 
   const exportZip = async (): Promise<void> => {
     const path = await window.api.exportZip()
@@ -121,6 +148,21 @@ export function SettingsView() {
       fail(error)
     }
     window.api.isRaycastInstalled().then(setRaycast, fail)
+  }
+
+  const toggleOmarchy = async (installed: boolean): Promise<void> => {
+    setOmarchy({ installed: null })
+    try {
+      if (installed) {
+        await window.api.removeOmarchy()
+        show('Removed from Omarchy.')
+      } else {
+        show(OMARCHY_INSTALLED[await window.api.installOmarchy()])
+      }
+    } catch (error) {
+      fail(error)
+    }
+    window.api.isOmarchyInstalled().then((now) => setOmarchy({ installed: now }), fail)
   }
 
   return (
@@ -254,6 +296,29 @@ export function SettingsView() {
                 title={raycast === null ? 'Checking Raycast…' : undefined}
               >
                 {raycast ? 'Remove' : 'Install'}
+              </Pill>
+            </Row>
+          </Section>
+        )}
+
+        {omarchy && (
+          <Section title="Omarchy">
+            <Row>
+              <IconTile color="blue">
+                <LayoutGrid size={16} />
+              </IconTile>
+              <RowText title="Search memes from the Omarchy shell">
+                {omarchy.installed
+                  ? 'Installed. Press Super+Ctrl+M, type, then Enter to paste.'
+                  : 'Adds a meme picker to the shell, like the clipboard and emoji pickers.'}
+              </RowText>
+              <Pill
+                size="sm"
+                onClick={() => omarchy.installed !== null && void toggleOmarchy(omarchy.installed)}
+                disabled={omarchy.installed === null}
+                title={omarchy.installed === null ? 'Checking Omarchy…' : undefined}
+              >
+                {omarchy.installed ? 'Remove' : 'Install'}
               </Pill>
             </Row>
           </Section>

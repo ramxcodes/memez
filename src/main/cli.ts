@@ -41,6 +41,9 @@ export function parseCommandLine(argv: readonly string[]): Command {
   }
 }
 
-/** True when the command asks for nothing: a plain second launch shows the library window. */
+/**
+ * True when the command asks for nothing: a plain second launch shows the library window.
+ * `--hidden` is not nothing: an autostart while Memez runs must not open a window.
+ */
 export const isEmptyCommand = (command: Command): boolean =>
-  command.links.length === 0 && !command.togglePopup && !command.show
+  command.links.length === 0 && !command.togglePopup && !command.show && !command.hidden

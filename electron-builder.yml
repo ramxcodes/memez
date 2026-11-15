@@ -81,41 +81,63 @@ linux:
     paste it into any chat in about two seconds.
   maintainer: ramxcodes <ramxcodes@users.noreply.github.com>
   vendor: ramxcodes
-  # The `protocols` above add MimeType=x-scheme-handler/memez; to the desktop entry, and the
-  # app gets memez:// links (and --show / --toggle-popup) as arguments: Exec=... %U.
-  desktop:
-    entry:
-      GenericName: Meme Library
-      Keywords: meme;memes;gif;reaction;sticker;clipboard;paste;
+  # The `protocols` above add MimeType=x-scheme-handler/memez; to the desktop entries, and the
+  # app gets memez:// links (and --show / --toggle-popup) as arguments: Exec=... %U. The
+  # entries are set per target (appImage:, pacman:): a `desktop` here would be shared, and
+  # electron-builder merges each target's `desktop` into it, so the pacman action would also
+  # land in the AppImage.
   # The packages carry the license next to the app (/opt/Memez/LICENSE).
   extraFiles:
     - from: LICENSE
       to: LICENSE
+appImage:
+  desktop:
+    entry:
+      GenericName: Meme Library
+      Keywords: meme;memes;gif;reaction;sticker;clipboard;paste;
 pacman:
   # memez-1.0.0-1-x86_64.pkg.tar.zst, the name pacman itself would give it.
   artifactName: ${name}-${version}-1-x86_64.pkg.tar.zst
   compression: zstd
+  # Arch versions of the install scripts: /usr/bin/memez and the sandbox helper only.
+  afterInstall: build/linux/pacman-after-install.tpl
+  afterRemove: build/linux/pacman-after-remove.tpl
+  # The popup action only here: an AppImage has no fixed path for the action to run.
+  desktop:
+    entry:
+      GenericName: Meme Library
+      Keywords: meme;memes;gif;reaction;sticker;clipboard;paste;
+      Actions: popup;
+    desktopActions:
+      popup:
+        Name: Search Memes
+        Exec: /opt/Memez/memez --toggle-popup
   # electron-builder joins synopsis and description with a newline, which breaks pkgdesc in
-  # .PKGINFO. A later --description wins.
+  # .PKGINFO, so a later --description replaces it. The license also goes where Arch expects it
+  # (the path is relative to the project folder, where fpm runs).
   fpm:
     - --description
     - Local meme library with a hotkey search popup and on-device AI tags
-  # Libraries Electron and the bundled native modules link against. The default list of
-  # electron-builder names packages Arch no longer has (http-parser, libappindicator-gtk3).
+    - LICENSE=/usr/share/licenses/memez/LICENSE
+  # Libraries Electron and the bundled native modules link against, and bash for the Omarchy
+  # plugin scripts. electron-builder's default list names packages Arch no longer has
+  # (http-parser, libappindicator-gtk3).
   # Optional tools (wl-clipboard, wtype, xdotool, tesseract, tesseract-data-eng) are optdepends
   # of the AUR package. fpm drops pacman optdepends (its template reads a different key).
   depends:
     - alsa-lib
     - at-spi2-core
+    - bash
     - cairo
     - dbus
     - expat
-    - gcc-libs
     - glib2
     - glibc
     - gtk3
     - hicolor-icon-theme
     - libcups
+    - libgcc
+    - libstdc++
     - libx11
     - libxcb
     - libxcomposite
@@ -129,6 +151,7 @@ pacman:
     - nss
     - pango
     - systemd-libs
+    # Electron opens links and folders with xdg-open.
     - xdg-utils
 win:
   target:

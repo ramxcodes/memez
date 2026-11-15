@@ -5,6 +5,7 @@ import { homedir } from 'node:os'
 import { delimiter, join, relative } from 'node:path'
 import { setTimeout as wait } from 'node:timers/promises'
 import { promisify } from 'node:util'
+import type { OmarchyBinding } from '../shared/types'
 
 const run = promisify(execFile)
 
@@ -39,8 +40,7 @@ async function onPath(command: string): Promise<boolean> {
 export const hasOmarchy = async (): Promise<boolean> =>
   process.platform === 'linux' && (await onPath('omarchy-shell'))
 
-export const isOmarchyInstalled = (): Promise<boolean> =>
-  exists(join(pluginDir(), 'manifest.json'))
+export const isOmarchyInstalled = (): Promise<boolean> => exists(join(pluginDir(), 'manifest.json'))
 
 // --- The key binding. Pure text edits, so they are tested without a desktop. ---
 
@@ -85,10 +85,7 @@ const SUPER_CTRL = 64 | 4
 export const keyTaken = (binds: HyprBind[]): boolean =>
   binds.some((bind) => bind.modmask === SUPER_CTRL && bind.key.toLowerCase() === 'm')
 
-/** What happened to the key binding on install. Settings shows it. */
-export type BindingResult = 'added' | 'existing' | 'taken' | 'no-config'
-
-async function bindKey(): Promise<BindingResult> {
+async function bindKey(): Promise<OmarchyBinding> {
   const file = bindingsFile()
   // Omarchy's Lua config. Older setups use another format; Settings then says how to bind.
   if (!(await exists(file))) return 'no-config'
@@ -149,7 +146,7 @@ async function copyPlugin(libraryRoot: string): Promise<void> {
  * Puts the Memez overlay in the Omarchy shell and binds Super+Ctrl+M to it. Returns what happened
  * to the key binding. Throws when the shell cannot enable the plugin.
  */
-export async function installOmarchy(libraryRoot: string): Promise<BindingResult> {
+export async function installOmarchy(libraryRoot: string): Promise<OmarchyBinding> {
   if (!(await hasOmarchy())) throw new Error('This is not an Omarchy desktop.')
   await copyPlugin(libraryRoot)
   await enablePlugin()

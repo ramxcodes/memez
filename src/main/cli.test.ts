@@ -40,7 +40,7 @@ describe('parseCommandLine', () => {
     expect(isEmptyCommand(command)).toBe(false)
   })
 
-  it('does not treat --hidden alone as a request for a window', () => {
-    expect(isEmptyCommand(parseCommandLine(['memez', '--hidden']))).toBe(true)
+  it('does not open the library window for a second launch with --hidden (autostart)', () => {
+    expect(isEmptyCommand(parseCommandLine(['memez', '--hidden']))).toBe(false)
   })
 })

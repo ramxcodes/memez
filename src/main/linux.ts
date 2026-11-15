@@ -1,6 +1,7 @@
 import { execFile, spawn } from 'node:child_process'
 import { accessSync, constants } from 'node:fs'
 import { delimiter, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 
 /**
@@ -95,13 +96,21 @@ export async function waylandClipboardTypes(wlPaste: string): Promise<string[] |
   }
 }
 
+// Closes every inherited file descriptor above stderr, then runs the command. Chromium keeps
+// some descriptors open across exec (the DevTools port, for one), and wl-copy lives on after
+// Memez: it would hold them, so a restarted Memez could not listen on that port again.
+const CLOSE_FDS_AND_EXEC =
+  'for f in /proc/$$/fd/*; do n=${f##*/}; [ "$n" -gt 2 ] && eval "exec $n>&-"; done; exec "$0" "$@"'
+
 /**
  * Puts `data` on the Wayland clipboard as `type` with `wl-copy`. wl-copy forks a process that
  * serves the clipboard until something else is copied, so this does not wait for it to exit.
  */
 export function wlCopy(wlCopyPath: string, type: string, data: Uint8Array | string): Promise<void> {
   return new Promise((resolve, reject) => {
-    const child = spawn(wlCopyPath, ['--type', type], { stdio: ['pipe', 'ignore', 'pipe'] })
+    const child = spawn('/bin/sh', ['-c', CLOSE_FDS_AND_EXEC, wlCopyPath, '--type', type], {
+      stdio: ['pipe', 'ignore', 'pipe']
+    })
     let stderr = ''
     child.stderr.on('data', (chunk) => (stderr += String(chunk)))
     child.on('error', reject)
@@ -142,4 +151,62 @@ export function launchCommand(
         ? ['memez']
         : [app.execPath]
   return [...parts, flag].map(shellQuote).join(' ')
+}
+
+/** The bytes of the Wayland clipboard as `type`, from `wl-paste`. */
+async function wlPasteBytes(wlPaste: string, type: string): Promise<Buffer> {
+  const { stdout } = await promisify(execFile)(wlPaste, ['--no-newline', '--type', type], {
+    encoding: 'buffer',
+    maxBuffer: 512 * 1024 * 1024,
+    timeout: 10_000
+  })
+  return stdout
+}
+
+const IMAGE_TYPES = ['image/gif', 'image/png', 'image/webp', 'image/jpeg']
+
+/** What to read from a Wayland clipboard that offers `types`, best first. */
+export function waylandClipboardPlan(types: string[]): {
+  uriList: boolean
+  text: boolean
+  image: string | null
+} {
+  return {
+    uriList: types.includes('text/uri-list'),
+    text: types.includes('text/plain;charset=utf-8') || types.includes('text/plain'),
+    image: IMAGE_TYPES.find((type) => types.includes(type)) ?? null
+  }
+}
+
+/**
+ * Reads the meme on the Wayland clipboard with `wl-paste`, for `memez://add`: Chromium on
+ * Wayland only sees the clipboard while one of its windows has focus, and a link comes while
+ * none has. Copied files first, then a copied link (downloaded), then copied image data.
+ */
+export async function readWaylandClipboardMedia(
+  wlPaste: string,
+  ingest: {
+    readFiles(paths: string[]): Promise<Uint8Array[]>
+    downloadMedia(url: string): Promise<Uint8Array>
+  }
+): Promise<Uint8Array[]> {
+  const types = await waylandClipboardTypes(wlPaste)
+  if (!types?.length) throw new Error('The clipboard is empty.')
+  const plan = waylandClipboardPlan(types)
+  if (plan.uriList) {
+    const uris = String(await wlPasteBytes(wlPaste, 'text/uri-list')).split(/\r?\n/)
+    const paths = uris.filter((uri) => uri.startsWith('file://')).map((uri) => fileURLToPath(uri))
+    if (paths.length > 0) return ingest.readFiles(paths)
+  }
+  const text = plan.text ? String(await wlPasteBytes(wlPaste, 'text/plain')).trim() : ''
+  const link = /^https?:\/\/\S+$/.test(text) ? text : null
+  if (link) {
+    try {
+      return [await ingest.downloadMedia(link)]
+    } catch (error) {
+      if (!plan.image) throw error // With no image, the download error is the answer.
+    }
+  }
+  if (plan.image) return [new Uint8Array(await wlPasteBytes(wlPaste, plan.image))]
+  throw new Error('Copy an image, GIF, video or link first.')
 }

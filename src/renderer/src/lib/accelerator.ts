@@ -33,11 +33,13 @@ type KeyPress = Pick<KeyboardEvent, 'code' | 'metaKey' | 'ctrlKey' | 'altKey' | 
  * Turns a key press into an Electron accelerator, like `Command+Shift+M`.
  * Returns null until the user presses a normal key with at least one modifier,
  * because a global shortcut without a modifier would block that key in every app.
+ * The Super (Windows) key is `Super` off macOS: Electron ignores `Command` there, so
+ * Super+Shift+M would register as Shift+M and swallow every capital M.
  */
-export function toAccelerator(event: KeyPress): string | null {
+export function toAccelerator(event: KeyPress, isMac = true): string | null {
   const key = keyName(event.code)
   const modifiers = [
-    event.metaKey ? 'Command' : '',
+    event.metaKey ? (isMac ? 'Command' : 'Super') : '',
     event.ctrlKey ? 'Control' : '',
     event.altKey ? 'Alt' : '',
     event.shiftKey ? 'Shift' : ''

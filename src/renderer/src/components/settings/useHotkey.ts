@@ -26,7 +26,7 @@ export function useHotkey(onError: (error: unknown) => void) {
     const onKeyDown = (event: KeyboardEvent): void => {
       event.preventDefault()
       if (event.key === 'Escape') return setRecording(false)
-      const accelerator = toAccelerator(event)
+      const accelerator = toAccelerator(event, window.api.isMac)
       if (!accelerator) return // Only modifiers so far, or a key without one.
       setRecording(false)
       window.api.setHotkey(accelerator).then(load, onError)
