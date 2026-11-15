@@ -137,7 +137,8 @@ export function Sidebar({ memes, scope, onScope, autoTag, onError }: Props) {
   const libraryIcon = 'shrink-0 text-accent'
   return (
     <nav className="flex w-[220px] shrink-0 flex-col border-r border-hairline bg-sidebar">
-      <div className="drag-region h-[52px] shrink-0" />
+      {/* Room for the macOS window buttons. Other systems draw no buttons inside the window. */}
+      <div className={`drag-region shrink-0 ${window.api.isMac ? 'h-[52px]' : 'h-3'}`} />
       <div className="flex flex-1 flex-col gap-0.5 overflow-y-auto px-2.5 pb-3">
         <Heading>Library</Heading>
         <Item

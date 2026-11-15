@@ -23,19 +23,38 @@ import { pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
 import { electronApp, optimizer } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
-import { MEDIA_EXTS, mediaFileName, mediaKind, type Meme, type MemezIpc } from '../shared/types'
+import { MEDIA_EXTS, mediaKind, type Meme, type MemezIpc } from '../shared/types'
 import { backupHandlers } from './backup'
+import { CLI_HELP, isEmptyCommand, parseCommandLine, type Command } from './cli'
 import { exportZip, importZip } from './archive'
 import { createAi } from './ai'
 import { createAutoTagger } from './autotag'
-import { grabFrames } from './frames'
+import { readFrames } from './frames'
 import { downloadMedia, readClipboardMedia, readFiles } from './ingest'
 import type { Handlers, MainContext } from './ipc'
 import { openLibrary, type Library } from './library'
 import { parseLink } from './links'
+import {
+  choosePasteTool,
+  findExecutable,
+  launchCommand,
+  linuxSession,
+  pasteToolFor,
+  pressPaste,
+  readWaylandClipboardMedia,
+  waylandClipboardTypes,
+  wlCopy
+} from './linux'
 import { modelHandlers } from './models'
-import { createOcrQueue } from './ocr'
+import { createOcrQueue, decodeStill, stillImageOcr } from './ocr'
 import { installRaycast, isRaycastInstalled, removeRaycast, updateRaycast } from './raycast'
+import {
+  hasOmarchy,
+  installOmarchy,
+  isOmarchyInstalled,
+  removeOmarchy,
+  updateOmarchy
+} from './omarchy'
 import { createSemanticSearch, openVectors } from './semantic'
 import { loadSettings, saveSettings, type Settings } from './settings'
 import { createLibraryWindow, createPopupWindow, createSettingsWindow, showPopup } from './windows'
@@ -43,6 +62,29 @@ import { createLibraryWindow, createPopupWindow, createSettingsWindow, showPopup
 // `MEMEZ_LIBRARY` points dev and test runs at another folder.
 const LIBRARY_ROOT = process.env['MEMEZ_LIBRARY'] ?? join(homedir(), 'Memez')
 const MEDIA_NAME = new RegExp(`^[a-f0-9]{16}\\.(${MEDIA_EXTS.join('|')})$`)
+
+// What this launch was asked to do (`memez --toggle-popup`, `memez memez://add`, …). See cli.ts.
+const launch = parseCommandLine(process.argv)
+if (launch.help) {
+  console.log(CLI_HELP)
+  app.exit(0)
+}
+
+// One Memez at a time. A second launch hands its command line to this one (`second-instance`)
+// and quits. Its argv goes along as data too: Chromium can add or reorder switches in the
+// `second-instance` argv.
+const isFirstInstance = !launch.help && app.requestSingleInstanceLock({ argv: process.argv })
+if (!isFirstInstance) app.quit()
+
+const SESSION = linuxSession(process.env)
+
+// Wayland has no way for an app to grab a key for itself. Chromium can ask the desktop through
+// the GlobalShortcuts portal instead (KDE, GNOME 48+, Hyprland). It needs an installed
+// `.desktop` file that matches the app's desktop name, so it does nothing in development or in
+// an AppImage that is not integrated. On Hyprland the shortcut then shows in
+// `hyprctl globalshortcuts` and fires only once bound in hyprland.conf; `memez --toggle-popup`
+// is the simpler binding (Settings shows it).
+if (SESSION === 'wayland') app.commandLine.appendSwitch('enable-features', 'GlobalShortcutsPortal')
 
 // `meme://media/<file>` serves library files to the renderer. Must run before `app` is ready.
 protocol.registerSchemesAsPrivileged([
@@ -60,6 +102,8 @@ let settingsWindow: BrowserWindow | null = null
 let semanticSearch: ReturnType<typeof createSemanticSearch>
 // `memez://` links from Raycast. A link can start the app, so it waits until the app is ready.
 const linkHandler = Promise.withResolvers<(url: string) => Promise<void>>()
+// Command lines of later launches, run once the app is ready.
+const appReady = Promise.withResolvers<void>()
 
 const broadcast = (channel: string, ...args: unknown[]): void =>
   BrowserWindow.getAllWindows().forEach((window) => window.webContents.send(channel, ...args))
@@ -78,9 +122,13 @@ function openSettings(): void {
   if (process.platform === 'darwin') app.focus({ steal: true })
 }
 
-/** The macOS menu bar: the standard menus, plus Settings… (⌘,) in the app menu. */
+/**
+ * The macOS menu bar: the standard menus, plus Settings… (⌘,) in the app menu. Linux and Windows
+ * get no menu bar: Electron's default File/Edit/View/Window bar does not fit the app, and its
+ * shortcuts are handled by the renderer (Ctrl+,) and Chromium (text editing) anyway.
+ */
 function setAppMenu(): void {
-  if (process.platform !== 'darwin') return
+  if (process.platform !== 'darwin') return Menu.setApplicationMenu(null)
   Menu.setApplicationMenu(
     Menu.buildFromTemplate([
       {
@@ -133,13 +181,56 @@ function registerHotkey(next: string | null, previous?: string | null): void {
  */
 async function copyMeme(library: Library, meme: Meme): Promise<void> {
   const path = library.pathOf(meme)
-  const formats: Record<string, string | Blob> = { 'text/uri-list': pathToFileURL(path).href }
+  const uri = pathToFileURL(path).href
+  const formats: Record<string, string | Blob> = { 'text/uri-list': uri }
+  let png: Buffer | null = null
   if (mediaKind(meme.ext) === 'image') {
-    const png = nativeImage.createFromPath(path).toPNG()
+    png = (await decodeStill(path)).toPNG()
     if (png.length > 0)
       formats['image/png'] = new Blob([new Uint8Array(png)], { type: 'image/png' })
   }
   await clipboard.write([new ClipboardItem(formats)])
+  if (SESSION === 'wayland') await checkWaylandClipboard(uri, png?.length ? png : null)
+}
+
+/**
+ * Chromium on Wayland can only take the clipboard while one of its windows has keyboard focus
+ * (the protocol needs the serial of an input event), and then fails without an error. The popup
+ * and the library window have focus when the user copies, but if the compositor did not give
+ * it to them, copy with `wl-copy` instead: the image for a still image, else the file.
+ */
+async function checkWaylandClipboard(uri: string, png: Buffer | null): Promise<void> {
+  const wlPaste = findExecutable('wl-paste')
+  if (!wlPaste) return // Nothing to check with.
+  const start = Date.now()
+  // Chromium sets the selection a moment after `clipboard.write` resolves.
+  while (Date.now() - start < 800) {
+    const types = await waylandClipboardTypes(wlPaste)
+    if (types?.includes('text/uri-list') && (await waylandUriList(wlPaste)) === uri) {
+      console.log(`clipboard: Electron took the Wayland clipboard after ${Date.now() - start} ms`)
+      return
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50))
+  }
+  const copier = findExecutable('wl-copy')
+  if (!copier) throw new Error('Could not copy the meme. Install wl-clipboard: it has wl-copy.')
+  console.warn('Electron did not take the Wayland clipboard; copying with wl-copy')
+  await (png ? wlCopy(copier, 'image/png', png) : wlCopy(copier, 'text/uri-list', `${uri}\n`))
+}
+
+async function waylandUriList(wlPaste: string): Promise<string | null> {
+  try {
+    const { stdout } = await promisify(execFile)(
+      wlPaste,
+      ['--no-newline', '--type', 'text/uri-list'],
+      {
+        timeout: 2000
+      }
+    )
+    return stdout.trim()
+  } catch {
+    return null
+  }
 }
 
 // Posts ⌘V as a key event (CGEventPost) from macOS's built-in JavaScript. It needs only the
@@ -156,10 +247,45 @@ for (const keyDown of [true, false]) {
 }`
 
 /**
- * Sends ⌘V to the app in front. Throws when Memez has no Accessibility permission.
- * It never shows the macOS prompt itself: Settings → Allow… does that, once.
+ * The meme on the clipboard, for `memez://add`. On Wayland no Memez window has focus when a
+ * link comes, so Chromium cannot see the clipboard: read it with wl-paste instead.
+ */
+async function readClipboardForLink(): Promise<Uint8Array[]> {
+  const wlPaste = SESSION === 'wayland' ? findExecutable('wl-paste') : null
+  if (!wlPaste) return readClipboardMedia()
+  return readWaylandClipboardMedia(wlPaste, { readFiles, downloadMedia })
+}
+
+/** Linux: the tool that presses paste here, or null when it is not installed. */
+const linuxPasteTool = (): ReturnType<typeof choosePasteTool> =>
+  choosePasteTool(SESSION, (name) => findExecutable(name))
+
+/** True when Memez can press paste for the user, not only copy. */
+function canPasteHere(): boolean {
+  if (process.platform === 'darwin') return systemPreferences.isTrustedAccessibilityClient(false)
+  if (process.platform === 'linux') return linuxPasteTool() !== null
+  return false // Windows: copy only for now.
+}
+
+/**
+ * Sends paste to the app in front: ⌘V on macOS, Shift+Insert through wtype or xdotool on Linux.
+ * Throws when it cannot. macOS: it never shows the Accessibility prompt itself; Settings →
+ * Allow… does that, once.
  */
 async function pasteIntoFrontApp(): Promise<void> {
+  if (process.platform === 'linux') {
+    const tool = linuxPasteTool()
+    if (!tool) {
+      const install = pasteToolFor(SESSION)
+      throw new Error(
+        install
+          ? `To paste for you, Memez needs ${install}. Install it, for example: sudo pacman -S ${install}`
+          : 'Memez cannot paste in this session.'
+      )
+    }
+    await pressPaste(tool)
+    return
+  }
   if (!systemPreferences.isTrustedAccessibilityClient(false))
     throw new Error('To paste for you, Memez needs Accessibility access. Open Settings (⌘,).')
   await promisify(execFile)('osascript', ['-l', 'JavaScript', '-e', PASTE_SCRIPT])
@@ -209,12 +335,7 @@ async function registerIpc(library: Library, settings: Settings): Promise<void> 
     activeModels,
     (status) => broadcast('autotag:status', status),
     libraryChanged,
-    // Only videos and GIFs come here (see autotag.ts).
-    (meme) =>
-      grabFrames(
-        `meme://media/${mediaFileName(meme)}`,
-        mediaKind(meme.ext) === 'gif' ? 'gif' : 'video'
-      )
+    readFrames
   )
 
   const addAll = async (files: Uint8Array[]): ReturnType<MemezIpc['importFiles']> => {
@@ -235,7 +356,7 @@ async function registerIpc(library: Library, settings: Settings): Promise<void> 
         libraryChanged()
         return
       }
-      const results = await addAll(await readClipboardMedia())
+      const results = await addAll(await readClipboardForLink())
       const added = results.filter((result) => !result.duplicate).length
       new Notification({
         title: added > 0 ? 'Added to Memez' : 'Already in Memez',
@@ -293,10 +414,13 @@ async function registerIpc(library: Library, settings: Settings): Promise<void> 
       await library.markUsed(id)
       libraryChanged()
       popup.hide()
-      // Copy only: the user chose it in Settings, or the system cannot paste for us.
-      if (settings.pasteMode === 'copy' || process.platform !== 'darwin') return
+      // Copy only: the user chose it in Settings, or this system cannot paste for us (Windows;
+      // Linux without wtype or xdotool, where Settings says what to install). macOS without
+      // Accessibility access goes on, to say so in a notification.
+      if (settings.pasteMode === 'copy' || process.platform === 'win32') return
+      if (process.platform === 'linux' && !canPasteHere()) return
       // Wait for focus to go back to the app behind the popup.
-      await new Promise((resolve) => setTimeout(resolve, 120))
+      await new Promise((resolve) => setTimeout(resolve, process.platform === 'linux' ? 150 : 120))
       try {
         await pasteIntoFrontApp()
       } catch (error) {
@@ -376,8 +500,26 @@ async function registerIpc(library: Library, settings: Settings): Promise<void> 
       LIBRARY_ROOT.startsWith(homedir()) && process.platform !== 'win32'
         ? `~${LIBRARY_ROOT.slice(homedir().length)}`
         : LIBRARY_ROOT,
-    canPaste: async () =>
-      process.platform !== 'darwin' || systemPreferences.isTrustedAccessibilityClient(false),
+    canPaste: async () => process.platform === 'win32' || canPasteHere(),
+    getDesktopSupport: async () => ({
+      session: SESSION,
+      pasteTool: pasteToolFor(SESSION),
+      pasteToolInstalled: linuxPasteTool() !== null,
+      stillImageOcr: stillImageOcr(),
+      toggleCommand:
+        process.platform === 'linux'
+          ? launchCommand(
+              '--toggle-popup',
+              {
+                packaged: app.isPackaged,
+                execPath: process.execPath,
+                appPath: app.getAppPath()
+              },
+              process.env,
+              findExecutable('memez')
+            )
+          : null
+    }),
     openPasteAccess: async () => {
       systemPreferences.isTrustedAccessibilityClient(true) // Adds Memez to the list.
       await shell.openExternal(
@@ -391,6 +533,10 @@ async function registerIpc(library: Library, settings: Settings): Promise<void> 
     isRaycastInstalled: async () => isRaycastInstalled(),
     installRaycast: async () => installRaycast(),
     removeRaycast: async () => removeRaycast(),
+    hasOmarchy: async () => hasOmarchy(),
+    isOmarchyInstalled: async () => isOmarchyInstalled(),
+    installOmarchy: async () => installOmarchy(LIBRARY_ROOT),
+    removeOmarchy: async () => removeOmarchy(),
     renameTag: async (_, from, to) => {
       await library.renameTag(from, to)
       libraryChanged()
@@ -406,13 +552,35 @@ async function registerIpc(library: Library, settings: Settings): Promise<void> 
   for (const [channel, handler] of Object.entries(handlers)) ipcMain.handle(channel, handler)
 }
 
-// Must be added before the app is ready: the link that starts the app arrives early.
+/**
+ * Runs a command line (see cli.ts). A later launch with nothing to do shows the library window,
+ * so starting Memez from the app launcher again brings it back.
+ */
+function runCommand(command: Command, laterLaunch: boolean): void {
+  for (const url of command.links) void linkHandler.promise.then((open) => open(url))
+  if (command.togglePopup) togglePopup()
+  if (command.show || (laterLaunch && isEmptyCommand(command))) openLibraryWindow()
+}
+
+// macOS: links come as events. Must be added before the app is ready: the link that starts the
+// app arrives early.
 app.on('open-url', (event, url) => {
   event.preventDefault()
   void linkHandler.promise.then((open) => open(url))
 })
 
+// Linux and Windows: the system starts `memez <link>`, and a window manager key runs
+// `memez --toggle-popup`. That second process gets here and quits.
+app.on('second-instance', (_, argv, __, data) => {
+  const sent = (data as { argv?: unknown } | null)?.argv
+  const command = parseCommandLine(
+    Array.isArray(sent) && sent.every((arg) => typeof arg === 'string') ? sent : argv
+  )
+  void appReady.promise.then(() => runCommand(command, true))
+})
+
 app.whenReady().then(async () => {
+  if (!isFirstInstance) return
   electronApp.setAppUserModelId('com.ramxcodes.memez')
   app.on('browser-window-created', (_, window) => optimizer.watchWindowShortcuts(window))
   app.on('before-quit', () => (quitting = true))
@@ -436,7 +604,8 @@ app.whenReady().then(async () => {
 
   const settings = await loadSettings()
   await registerIpc(library, settings)
-  libraryWindow = createLibraryWindow(() => quitting)
+  // Started by a popup key binding or by autostart: no library window until asked.
+  libraryWindow = createLibraryWindow(() => quitting, !launch.hidden && !launch.togglePopup)
   popup = createPopupWindow()
   setAppMenu()
   tray = new Tray(nativeImage.createFromPath(icon).resize({ width: 18, height: 18 }))
@@ -450,8 +619,12 @@ app.whenReady().then(async () => {
     console.warn(error)
   }
 
+  runCommand(launch, false)
+  appReady.resolve()
+
   // Best effort: an old extension still works, so a failed update must not stop the app.
   updateRaycast().catch((error) => console.warn('Raycast extension update failed', error))
+  updateOmarchy(LIBRARY_ROOT).catch((error) => console.warn('Omarchy plugin update failed', error))
 })
 
 app.on('will-quit', () => globalShortcut.unregisterAll())

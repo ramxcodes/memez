@@ -3,6 +3,7 @@ import type { Library } from './library'
 import type { ModelId, ModelRole } from '../shared/models'
 import type { Ai } from './ai'
 import { AiCrashError, AiStoppedError } from './aiProcess'
+import type { Frame } from './aiModels'
 import type { Vectors } from './semantic'
 
 // A crash skips its meme. More crashes in a row than this stop the queue (see `run`).
@@ -28,7 +29,7 @@ const messageOf = (error: unknown): string =>
  * `isEnabled` is the user's "Local AI" setting; when it is off, nothing new is queued.
  */
 export function createAutoTagger(
-  library: Pick<Library, 'list' | 'pathOf' | 'applyAutoTags' | 'setOcrText'>,
+  library: Pick<Library, 'list' | 'applyAutoTags' | 'setOcrText'>,
   vectors: Pick<Vectors, 'has' | 'set'>,
   ai: Ai,
   cacheDir: string,
@@ -36,8 +37,11 @@ export function createAutoTagger(
   activeModels: () => Record<ModelRole, ModelId>,
   onStatus: (status: AutoTagStatus) => void,
   onTagged: () => void,
-  /** Frames from across a video or GIF (see frames.ts). Throws when the file cannot be decoded. */
-  grabFrames: (meme: Meme) => Promise<Uint8Array[]>
+  /**
+   * The decoded pictures of a meme, or of an image file at a path: one for a still image, a few
+   * from across a video or GIF (see frames.ts). Throws when the file cannot be decoded.
+   */
+  readFrames: (item: Meme | string) => Promise<Frame[]>
 ) {
   let model: ModelStatus = { state: 'idle' }
   /**
@@ -107,7 +111,7 @@ export function createAutoTagger(
           }
           await prepare(active, options.suggest || options.readText)
           try {
-            const frames = clip ? await grabFrames(meme) : [library.pathOf(meme)]
+            const frames = await readFrames(meme)
             const { vector, suggestion, text } = await ai.call(
               'read',
               cacheDir,
@@ -193,7 +197,7 @@ export function createAutoTagger(
       const active = activeModels()
       await prepare(active, false)
       const options = { suggest: false, readText: false }
-      const { vector } = await ai.call('read', cacheDir, active, [path], options)
+      const { vector } = await ai.call('read', cacheDir, active, await readFrames(path), options)
       setReady()
       return vector
     },

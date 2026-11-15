@@ -1,5 +1,6 @@
 import { Command } from 'lucide-react'
 import { acceleratorKeys } from '../../lib/accelerator'
+import { useDesktopSupport } from '../../lib/hooks'
 import { IconTile, Keycaps, Pill, Row } from '../ui'
 import { useHotkey } from './useHotkey'
 
@@ -7,16 +8,25 @@ import { useHotkey } from './useHotkey'
 export function HotkeyRow({ onError }: { onError: (error: unknown) => void }) {
   const { hotkey, recording, record, cancel, remove } = useHotkey(onError)
   const accelerator = hotkey?.hotkey ?? null
+  // On Wayland the desktop owns global keys: Memez can ask for one through the desktop portal,
+  // but cannot tell whether it works (Hyprland, for one, needs a binding in its own config).
+  const wayland = useDesktopSupport()?.session === 'wayland'
+  const icon = window.api.isMac ? 'menu bar icon' : 'tray icon'
 
   const status = recording
     ? { text: 'Press the new shortcut. Escape cancels.', danger: false }
     : !hotkey
       ? { text: 'Opens the meme popup from any app.', danger: false }
       : accelerator === null
-        ? { text: 'No shortcut. Open the popup from the menu bar icon.', danger: false }
-        : !hotkey.active
-          ? { text: 'Another app uses this shortcut.', danger: true }
-          : { text: 'Opens the meme popup from any app.', danger: false }
+        ? { text: `No shortcut. Open the popup from the ${icon}.`, danger: false }
+        : wayland
+          ? {
+              text: 'Wayland: works only if your desktop passes it on. If it does nothing, bind the command below.',
+              danger: false
+            }
+          : !hotkey.active
+            ? { text: 'Another app uses this shortcut.', danger: true }
+            : { text: 'Opens the meme popup from any app.', danger: false }
 
   return (
     <Row>

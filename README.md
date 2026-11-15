@@ -12,14 +12,16 @@ computer too. Nothing is uploaded.
 
 ## Status
 
-Version 1.0.0. It is tested on macOS (Apple Silicon) only. The Linux and Windows builds are
-new and not tested yet.
+Version 1.0.0. It is tested on macOS (Apple Silicon) and, from source, on Arch Linux with
+Hyprland (Omarchy). The Linux packages are built and start, but have not been installed and used
+day to day yet. The Windows build is not tested.
 
-| System                | Build            | State                                                  |
-| --------------------- | ---------------- | ------------------------------------------------------ |
-| macOS (Apple Silicon) | `.zip`           | Tested                                                 |
-| Linux (x64)           | `.AppImage`      | Starts and runs. Local AI does not work yet, see below |
-| Windows (x64)         | `.exe` installer | Built, never run on a real machine                     |
+| System                | Build                           | State                                |
+| --------------------- | ------------------------------- | ------------------------------------ |
+| macOS (Apple Silicon) | `.zip`                          | Tested                               |
+| Arch Linux (x64)      | AUR `memez-bin`, `.pkg.tar.zst` | Works from source, Local AI included |
+| Linux (x64)           | `.AppImage`, `.tar.gz`          | Starts and runs                      |
+| Windows (x64)         | `.exe` installer                | Built, never run on a real machine   |
 
 If you try Linux or Windows, please open an issue and tell me what broke.
 
@@ -73,12 +75,46 @@ first time. The steps below get past it.
 After you install a new version, macOS can ask for Accessibility access again. If paste stops
 working, remove Memez from that list and add it again.
 
-### Linux
+### Arch Linux
+
+From the AUR, with an AUR helper:
+
+```bash
+yay -S memez-bin
+```
+
+Or download `memez-*-x86_64.pkg.tar.zst` from the release and install it with pacman:
+
+```bash
+sudo pacman -U memez-*-x86_64.pkg.tar.zst
+```
+
+Both install the `memez` command, a menu entry and the `memez://` link handler. Optional tools:
+`wl-clipboard` and `wtype` (Wayland) or `xdotool` (X11) to paste for you, and `tesseract` with
+`tesseract-data-eng` to read the text in memes. The AUR package lists them as optional
+dependencies; with the `.pkg.tar.zst`, install them yourself:
+
+```bash
+sudo pacman -S --needed wl-clipboard wtype xdotool tesseract tesseract-data-eng
+```
+
+On Omarchy, use the [Omarchy plugin](#omarchy) instead: it adds a key and a picker in the
+shell. Elsewhere, bind a key to `memez --toggle-popup` (Settings shows the exact command). In a
+classic `hyprland.conf`:
+
+```ini
+bind = SUPER ALT, M, exec, memez --toggle-popup
+```
+
+### Other Linux
 
 ```bash
 chmod +x Memez-*.AppImage
 ./Memez-*.AppImage
 ```
+
+The AppImage does not add a menu entry or the `memez://` link handler by itself. The
+`Memez-*-linux-x64.tar.gz` holds the same app unpacked; run `memez` inside it.
 
 ### Windows
 
@@ -95,8 +131,15 @@ Run `Memez-*-win-x64.exe`. If SmartScreen stops it, choose "More info", then "Ru
 - **Settings (⌘,).** Change the hotkey, turn Local AI on or off, get or delete models, and
   choose whether picking a meme pastes it or only copies it.
 
-On Linux and Windows, use Ctrl where this page says ⌘. Picking a meme copies it there; paste it
-yourself with Ctrl+V.
+On Linux and Windows, use Ctrl where this page says ⌘. On Windows, picking a meme copies it; paste
+it yourself with Ctrl+V.
+
+On Linux, picking a meme pastes it with `wtype` (Wayland) or `xdotool` (X11), which press
+Shift+Insert in the app behind. Without them Memez only copies (`sudo pacman -S wtype`). Wayland
+apps cannot grab a global key by themselves, so the hotkey in Settings may do nothing there: bind
+a key in your window manager to `memez --toggle-popup` instead. Other flags: `--show` opens the
+library, `--hidden` starts in the tray (for autostart), and `memez://add` adds the meme on the
+clipboard.
 
 ## Local AI
 
@@ -109,8 +152,10 @@ They download once, about 570 MB, on first launch with Local AI on. The sidebar 
 progress. Settings has larger models if you want better titles or search. GIFs and videos are
 read from a few frames across the whole clip, not only the first frame. Audio is not read.
 
-On macOS, Apple Vision reads the text in still images. On Linux and Windows there is no text
-reading for still images yet.
+On macOS, Apple Vision reads the text in still images. On Linux,
+[Tesseract](https://github.com/tesseract-ocr/tesseract) does, when it is installed
+(`sudo pacman -S tesseract tesseract-data-eng`); memes added before you install it are read on the
+next launch. On Windows there is no text reading for still images yet.
 
 ## Raycast (macOS)
 
@@ -124,17 +169,39 @@ Settings → Raycast → **Install** adds two commands. No `npm` and no running 
 If the commands do not show after Install, run Raycast's "Import Extension" command and pick
 `~/.config/raycast/extensions/memez`.
 
+## Omarchy
+
+On [Omarchy](https://omarchy.org), Settings → Omarchy → **Install** adds a meme picker to the
+Omarchy shell, next to its clipboard and emoji pickers, and binds Super+Ctrl+M to it (only if that
+key is free). Remove takes out the plugin and the key.
+
+- Type to search titles, tags and the text in memes, with small typos forgiven. Before you type,
+  recent memes come first.
+- Enter pastes into the app in front, Shift+Enter copies, Alt+Enter opens the file, Ctrl+1 to
+  Ctrl+9 paste by position. GIFs play when selected; videos show their first frame.
+- It follows the Omarchy theme. It reads the library folder and never writes to it, so it works
+  when Memez is closed. It has no search by meaning.
+
+It needs `wl-clipboard` and `wtype` (both come with Omarchy), and `ffmpeg` for video previews. The
+plugin lives in [`omarchy/`](omarchy/); to install it by hand, copy that folder to
+`~/.config/omarchy/plugins/memez` and run `omarchy plugin enable memez`, then bind a key to
+`omarchy-shell shell toggle memez`.
+
 ## Where your data is
 
 - Library: `~/Memez`, with `library.json` and a `media/` folder. Plain files, easy to back up.
   Set the `MEMEZ_LIBRARY` environment variable to use another folder.
-- Models and settings: the app data folder (`~/Library/Application Support/memez` on macOS).
+- Models and settings: the app data folder (`~/Library/Application Support/memez` on macOS,
+  `~/.config/memez` on Linux).
 
 ## Known issues
 
-- **Linux: Local AI crashes.** The image decoder (`sharp`) crashes inside Electron's helper
-  process on Linux. The app keeps running and shows "AI tagging failed". Everything else works.
-  Turn Local AI off in Settings until this is fixed.
+- **Linux, Wayland: the hotkey.** The hotkey in Settings works only if your desktop's shortcut
+  portal passes it on. Bind a key to `memez --toggle-popup` in your window manager instead, or use
+  the Omarchy plugin.
+- **GNOME on Wayland: no paste.** GNOME has no virtual keyboard for `wtype`, so picking a meme
+  only copies it.
+- **Linux, X11:** paste with `xdotool` is tested only in unit tests.
 - **Windows: not tested.** The installer is built by CI and has never run on a real machine.
 - **Intel Macs:** there is no build yet. Build from source.
 
@@ -158,6 +225,9 @@ npm run lint
 ```
 
 Build the app for the system you are on. The result is in `dist/`.
+
+On Arch, the pacman package needs `libxcrypt-compat` for electron-builder's bundled `fpm` (or set
+`USE_SYSTEM_FPM=true` with `fpm` installed).
 
 ```bash
 npm --prefix raycast install   # macOS only, once: the app carries the Raycast extension
@@ -183,8 +253,8 @@ GitHub Actions builds the macOS, Linux and Windows apps and attaches them to a r
 
 Electron, React and TypeScript. The models run with
 [transformers.js](https://github.com/huggingface/transformers.js) on ONNX Runtime, in their own
-process, so a crash in the model runtime cannot close the app. Video and GIF frames are decoded
-by the Chromium inside Electron, so there is no ffmpeg.
+process, so a crash in the model runtime cannot close the app. Images, video and GIF frames are
+decoded by the Chromium inside Electron, so there is no ffmpeg and no native image library.
 
 ## Contributing
 

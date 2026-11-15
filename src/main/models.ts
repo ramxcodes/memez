@@ -4,6 +4,7 @@ import { MODELS, modelInfo, type ModelId, type ModelInfo } from '../shared/model
 import type { ModelDownload, ModelState } from '../shared/types'
 import { SESSION_OPTIONS, sumProgress } from './aiModels'
 import type { Handlers, MainContext } from './ipc'
+import { loadTransformers } from './rawImage'
 import { rankSimilar } from './semantic'
 
 /** Bytes of all files under `dir`. 0 when it does not exist. */
@@ -46,7 +47,7 @@ export async function isModelReady(modelDir: string, model: ModelInfo): Promise<
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false
     throw error
   }
-  const ai = await import('@huggingface/transformers')
+  const ai = await loadTransformers()
   const config = new ai.PretrainedConfig(JSON.parse(json))
   const parts = await Promise.all(
     PARTS[model.role].map((model_file_name) =>
@@ -74,7 +75,7 @@ async function fetchModel(
   cacheDir: string,
   onProgress: (fraction: number) => void
 ): Promise<void> {
-  const ai = await import('@huggingface/transformers')
+  const ai = await loadTransformers()
   ai.env.cacheDir = cacheDir
   const options = { progress_callback: sumProgress(onProgress, model.approxBytes) }
   const withDtype = { ...options, dtype: model.dtype, session_options: SESSION_OPTIONS }
@@ -112,7 +113,7 @@ async function fetchModel(
  * deletes its temp file and `from_pretrained` rejects.
  */
 async function abortableFetch(aborts: Map<string, AbortController>): Promise<void> {
-  const ai = await import('@huggingface/transformers')
+  const ai = await loadTransformers()
   const base = ai.env.fetch
   ai.env.fetch = (input, init) => {
     const url = String(input)

@@ -1,0 +1,62 @@
+# Maintainer: ramxcodes <ramxcodes@users.noreply.github.com>
+#
+# Installs the prebuilt Linux app from the GitHub release: the Memez-<version>-linux-x64.tar.gz
+# that `electron-builder --linux tar.gz` makes (see electron-builder.yml).
+
+pkgname=memez-bin
+_pkgname=memez
+pkgver=1.0.0
+pkgrel=1
+pkgdesc='Local meme library with a hotkey search popup and on-device AI tags'
+arch=('x86_64')
+url='https://github.com/ramxcodes/memez'
+license=('MIT')
+# Libraries that Electron, ONNX Runtime and sharp link against; bash for the Omarchy plugin
+# scripts; xdg-utils because Electron opens links and folders with xdg-open.
+depends=(
+  'alsa-lib' 'at-spi2-core' 'bash' 'cairo' 'dbus' 'expat' 'glib2' 'glibc' 'gtk3'
+  'hicolor-icon-theme' 'libcups' 'libgcc' 'libstdc++' 'libx11' 'libxcb' 'libxcomposite'
+  'libxdamage' 'libxext' 'libxfixes' 'libxkbcommon' 'libxrandr' 'mesa' 'nspr' 'nss' 'pango'
+  'systemd-libs' 'xdg-utils'
+)
+optdepends=(
+  'wl-clipboard: copy memes to the clipboard on Wayland'
+  'wtype: paste the picked meme on Wayland'
+  'xdotool: paste the picked meme on X11'
+  'tesseract: read the text in still images'
+  'tesseract-data-eng: English text for tesseract'
+  'quickshell: the Omarchy shell plugin (Memez search in the Omarchy shell)'
+)
+provides=("$_pkgname")
+conflicts=("$_pkgname" "$_pkgname-git")
+# Prebuilt Electron app: stripping or splitting debug info would only break it.
+options=('!strip' '!debug')
+_artifact="Memez-$pkgver-linux-x64"
+source=(
+  "$_artifact.tar.gz::$url/releases/download/v$pkgver/$_artifact.tar.gz"
+  'memez.desktop'
+)
+# RELEASE: the tarball checksum is only known once the release is built. Replace 'SKIP' with
+# its sha256 (run `updpkgsums` after bumping pkgver), then `makepkg --printsrcinfo > .SRCINFO`.
+sha256sums=('SKIP'
+            'f7f19ae76dd59b5a2431a2eb97c67be351b117ab1906cc1ccef9af63de96b0c6')
+
+package() {
+  install -d "$pkgdir/opt/$_pkgname"
+  cp -a "$srcdir/$_artifact/." "$pkgdir/opt/$_pkgname/"
+
+  # Files electron-builder writes for its own packages (auto-update, Ubuntu AppArmor). This
+  # package updates through pacman.
+  rm -f "$pkgdir/opt/$_pkgname/resources/"{app-update.yml,package-type,apparmor-profile}
+
+  # Arch allows unprivileged user namespaces, so Chromium's sandbox needs no setuid helper.
+  chmod 0755 "$pkgdir/opt/$_pkgname/chrome-sandbox"
+
+  install -d "$pkgdir/usr/bin"
+  ln -s "/opt/$_pkgname/memez" "$pkgdir/usr/bin/memez"
+
+  install -Dm644 "$srcdir/memez.desktop" "$pkgdir/usr/share/applications/memez.desktop"
+  install -Dm644 "$pkgdir/opt/$_pkgname/resources/app.asar.unpacked/resources/icon.png" \
+    "$pkgdir/usr/share/icons/hicolor/512x512/apps/memez.png"
+  install -Dm644 "$srcdir/$_artifact/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

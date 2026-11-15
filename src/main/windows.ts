@@ -39,8 +39,11 @@ function createWindow(view: View, options: BrowserWindowConstructorOptions): Bro
   return window
 }
 
-/** The library window. Closing it only hides it, so the hotkey keeps working. */
-export function createLibraryWindow(isQuitting: () => boolean): BrowserWindow {
+/**
+ * The library window. Closing it only hides it, so the hotkey keeps working. `show`: false
+ * keeps it hidden until asked (`memez --hidden`, or started by `memez --toggle-popup`).
+ */
+export function createLibraryWindow(isQuitting: () => boolean, show = true): BrowserWindow {
   const window = createWindow('library', {
     width: 1180,
     height: 780,
@@ -51,7 +54,7 @@ export function createLibraryWindow(isQuitting: () => boolean): BrowserWindow {
     trafficLightPosition: { x: 18, y: 18 },
     vibrancy: 'sidebar'
   })
-  window.on('ready-to-show', () => window.show())
+  if (show) window.on('ready-to-show', () => window.show())
   window.on('close', (event) => {
     if (isQuitting()) return
     event.preventDefault()

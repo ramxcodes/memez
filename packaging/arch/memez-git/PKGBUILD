@@ -1,0 +1,85 @@
+# Maintainer: ramxcodes <ramxcodes@users.noreply.github.com>
+#
+# Builds Memez from the main branch with npm and electron-builder.
+
+pkgname=memez-git
+_pkgname=memez
+pkgver=1.0.0.r0.g0000000
+pkgrel=1
+pkgdesc='Local meme library with a hotkey search popup and on-device AI tags (git)'
+arch=('x86_64')
+url='https://github.com/ramxcodes/memez'
+license=('MIT')
+# Libraries that Electron, ONNX Runtime and sharp link against; bash for the Omarchy plugin
+# scripts; xdg-utils because Electron opens links and folders with xdg-open.
+depends=(
+  'alsa-lib' 'at-spi2-core' 'bash' 'cairo' 'dbus' 'expat' 'glib2' 'glibc' 'gtk3'
+  'hicolor-icon-theme' 'libcups' 'libgcc' 'libstdc++' 'libx11' 'libxcb' 'libxcomposite'
+  'libxdamage' 'libxext' 'libxfixes' 'libxkbcommon' 'libxrandr' 'mesa' 'nspr' 'nss' 'pango'
+  'systemd-libs' 'xdg-utils'
+)
+makedepends=('git' 'nodejs>=24' 'npm')
+optdepends=(
+  'wl-clipboard: copy memes to the clipboard on Wayland'
+  'wtype: paste the picked meme on Wayland'
+  'xdotool: paste the picked meme on X11'
+  'tesseract: read the text in still images'
+  'tesseract-data-eng: English text for tesseract'
+  'quickshell: the Omarchy shell plugin (Memez search in the Omarchy shell)'
+)
+provides=("$_pkgname")
+conflicts=("$_pkgname" "$_pkgname-bin")
+# npm ships prebuilt Electron, ONNX Runtime and sharp binaries: do not strip them.
+options=('!strip' '!debug')
+source=("$_pkgname::git+$url.git"
+        'memez.desktop')
+sha256sums=('SKIP'
+            'f7f19ae76dd59b5a2431a2eb97c67be351b117ab1906cc1ccef9af63de96b0c6')
+
+pkgver() {
+  cd "$_pkgname"
+  if git describe --long --tags --abbrev=7 >/dev/null 2>&1; then
+    git describe --long --tags --abbrev=7 | sed 's/^v//;s/\([^-]*-g\)/r\1/;s/-/./g'
+  else
+    printf '%s.r%s.g%s' "$(node -p "require('./package.json').version")" \
+      "$(git rev-list --count HEAD)" "$(git rev-parse --short=7 HEAD)"
+  fi
+}
+
+prepare() {
+  cd "$_pkgname"
+  # Keep npm's and Electron's downloads inside the build folder.
+  export npm_config_cache="$srcdir/npm-cache"
+  export ELECTRON_CACHE="$srcdir/electron-cache"
+  export electron_config_cache="$srcdir/electron-cache"
+  export ELECTRON_BUILDER_CACHE="$srcdir/electron-builder-cache"
+  npm ci --no-audit --no-fund
+}
+
+build() {
+  cd "$_pkgname"
+  export npm_config_cache="$srcdir/npm-cache"
+  export ELECTRON_CACHE="$srcdir/electron-cache"
+  export electron_config_cache="$srcdir/electron-cache"
+  export ELECTRON_BUILDER_CACHE="$srcdir/electron-builder-cache"
+  npx electron-vite build
+  # The unpacked app only (dist/linux-unpacked); no AppImage or package.
+  npx electron-builder --linux dir --x64 --publish never
+}
+
+package() {
+  cd "$_pkgname"
+  install -d "$pkgdir/opt/$_pkgname"
+  cp -a dist/linux-unpacked/. "$pkgdir/opt/$_pkgname/"
+  rm -f "$pkgdir/opt/$_pkgname/resources/"{app-update.yml,package-type,apparmor-profile}
+
+  # Arch allows unprivileged user namespaces, so Chromium's sandbox needs no setuid helper.
+  chmod 0755 "$pkgdir/opt/$_pkgname/chrome-sandbox"
+
+  install -d "$pkgdir/usr/bin"
+  ln -s "/opt/$_pkgname/memez" "$pkgdir/usr/bin/memez"
+
+  install -Dm644 "$srcdir/memez.desktop" "$pkgdir/usr/share/applications/memez.desktop"
+  install -Dm644 build/icon.png "$pkgdir/usr/share/icons/hicolor/512x512/apps/memez.png"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

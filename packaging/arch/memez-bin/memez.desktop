@@ -1,0 +1,17 @@
+[Desktop Entry]
+Type=Application
+Name=Memez
+GenericName=Meme Library
+Comment=Local meme library with a hotkey search popup and on-device AI tags
+Exec=memez %U
+Icon=memez
+Terminal=false
+Categories=Utility;
+Keywords=meme;memes;gif;reaction;sticker;clipboard;paste;
+MimeType=x-scheme-handler/memez;
+StartupWMClass=memez
+Actions=popup;
+
+[Desktop Action popup]
+Name=Search Memes
+Exec=memez --toggle-popup

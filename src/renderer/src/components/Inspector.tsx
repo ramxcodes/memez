@@ -2,6 +2,7 @@ import { Copy, FolderOpen, ScanSearch, Sparkles, Trash2, X } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
 import { mediaKind, type Meme, type MemePatch } from '../../../shared/types'
 import { formatDuration } from '../lib/format'
+import { useDesktopSupport } from '../lib/hooks'
 import { shownTitle, titleToSave, type TitleField } from '../lib/titleField'
 import { textInImage } from './library/info'
 import { MemeMedia } from './MemeMedia'
@@ -59,7 +60,8 @@ export function Inspector({
   const [titleField, setTitleField] = useState<TitleField>({ state: 'idle' })
   const [seconds, setSeconds] = useState<number>()
   const kind = mediaKind(meme.ext)
-  const ocr = textInImage(meme, window.api.isMac, tagging)
+  const desktop = useDesktopSupport()
+  const ocr = textInImage(meme, desktop?.stillImageOcr ?? null, tagging)
   const showFile = window.api.isMac ? 'Show in Finder' : 'Show in folder'
 
   const save = (patch: MemePatch): void => {

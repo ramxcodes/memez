@@ -9,6 +9,7 @@
     "url": "git+https://github.com/ramxcodes/memez.git"
   },
   "main": "./out/main/index.js",
+  "desktopName": "memez.desktop",
   "author": "ramxcodes",
   "scripts": {
     "format": "prettier --write .",

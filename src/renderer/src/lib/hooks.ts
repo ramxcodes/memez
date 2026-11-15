@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { AutoTagStatus, Meme, Settings } from '../../../shared/types'
+import type { AutoTagStatus, DesktopSupport, Meme, Settings } from '../../../shared/types'
 import { createSearch } from './search'
 import { applyDataMode, dataMode } from './worstCase'
 
@@ -61,6 +61,25 @@ export function useSearch(memes: Meme[], query: string): { results: Meme[]; sear
     const extra = semantic.ids.filter((id) => !shown.has(id)).flatMap((id) => byId.get(id) ?? [])
     return { results: [...text, ...extra], searching: false }
   }, [search, query, trimmed, semantic, memes])
+}
+
+/**
+ * What this desktop offers (paste tool, text reading, Wayland). `null` until loaded. Checks
+ * again when the window gets focus: the user may have installed a tool in a terminal meanwhile.
+ */
+export function useDesktopSupport(): DesktopSupport | null {
+  const [support, setSupport] = useState<DesktopSupport | null>(null)
+
+  useEffect(() => {
+    const load = (): void => {
+      window.api.getDesktopSupport().then(setSupport, console.warn)
+    }
+    load()
+    window.addEventListener('focus', load)
+    return () => window.removeEventListener('focus', load)
+  }, [])
+
+  return support
 }
 
 /** Device settings. `null` until loaded. Follows changes made in any window. */
