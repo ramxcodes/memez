@@ -24,8 +24,10 @@
     "postinstall": "install-electron && electron-builder install-app-deps",
     "build:unpack": "npm run build && electron-builder --dir",
     "build:raycast": "npm --prefix raycast run build -- -o ../resources/raycast",
+    "build:vicinae": "npm --prefix vicinae run build",
     "build:mac": "npm run build && npm run build:raycast && electron-builder --mac",
     "build:linux": "npm run build && electron-builder --linux",
+    "build:deb": "npm run build && electron-builder --linux deb --x64",
     "build:win": "npm run build && electron-builder --win"
   },
   "dependencies": {
