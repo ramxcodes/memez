@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "memez",
   "name": "Memez",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "author": "ramxcodes",
   "description": "Search your Memez library and paste a meme into the app in front",
   "kinds": ["overlay"],
