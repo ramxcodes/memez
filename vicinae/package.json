@@ -1,0 +1,47 @@
+{
+  "$schema": "https://raw.githubusercontent.com/vicinaehq/vicinae/refs/heads/main/extra/schemas/extension.json",
+  "name": "memez",
+  "title": "Memez",
+  "description": "Search your Memez library and paste a meme into the app in front",
+  "icon": "icon.png",
+  "author": "ramxcodes",
+  "categories": ["Media"],
+  "license": "MIT",
+  "commands": [
+    {
+      "name": "search-memes",
+      "title": "Search Memes",
+      "description": "Find a meme by title, tags or text in the image, then paste or copy it",
+      "mode": "view"
+    },
+    {
+      "name": "add-meme",
+      "title": "Add Meme from Clipboard",
+      "description": "Add the image, GIF, video or link on the clipboard to Memez",
+      "mode": "no-view"
+    }
+  ],
+  "preferences": [
+    {
+      "name": "libraryFolder",
+      "title": "Library Folder",
+      "description": "The Memez library folder (the one with library.json)",
+      "type": "textfield",
+      "required": false,
+      "default": "~/Memez"
+    }
+  ],
+  "scripts": {
+    "build": "vici build",
+    "dev": "vici develop",
+    "lint": "vici lint"
+  },
+  "dependencies": {
+    "@vicinae/api": "^0.30.1",
+    "fuse.js": "^7.5.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "typescript": "^5.9.3"
+  }
+}

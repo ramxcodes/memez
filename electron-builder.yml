@@ -14,6 +14,7 @@ files:
   # during the build also changes size while it is packed and breaks app.asar.
   - '!.proof/**'
   - '!raycast/**'
+  - '!vicinae/**'
   # Distro packaging and CI files are not part of the app.
   - '!packaging/**'
   - '!.github/**'
@@ -71,6 +72,9 @@ linux:
     # The unpacked app. The AUR memez-bin package installs from it (packaging/arch/memez-bin).
     - target: tar.gz
       arch: x64
+    # Ubuntu and other Debian-based distributions.
+    - target: deb
+      arch: x64
   # The command is `memez`, and the icon and desktop file are memez.png and memez.desktop.
   executableName: memez
   icon: build/icon.png
@@ -95,6 +99,16 @@ appImage:
     entry:
       GenericName: Meme Library
       Keywords: meme;memes;gif;reaction;sticker;clipboard;paste;
+deb:
+  # Debian package names use underscores: memez_1.1.0_amd64.deb.
+  artifactName: ${name}_${version}_${arch}.${ext}
+  # Optional desktop tools. The app works without them; paste and OCR are better with them.
+  recommends:
+    - wl-clipboard
+    - wtype
+    - xdotool
+    - tesseract-ocr
+    - tesseract-ocr-eng
 pacman:
   # memez-1.0.0-1-x86_64.pkg.tar.zst, the name pacman itself would give it.
   artifactName: ${name}-${version}-1-x86_64.pkg.tar.zst

@@ -12,6 +12,7 @@ export default defineConfig(
       '**/dist',
       '**/out',
       'raycast/raycast-env.d.ts',
+      'vicinae/vicinae-env.d.ts',
       'resources/raycast',
       // QML-side JavaScript for the Omarchy shell: ES5 style, not part of the app build.
       'omarchy/**/*.js'

@@ -37,6 +37,7 @@ If you try Linux or Windows, please open an issue and tell me what broke.
 - **Find similar, and search by image.** Drop an image on the search field to find memes that
   look like it.
 - **Raycast extension** (macOS). Search and paste memes from Raycast.
+- **Vicinae extension** (Linux, macOS and Windows). Search and paste memes from Vicinae.
 - **Backup.** A folder backup (iCloud Drive by default on macOS), and zip export and import to
   move to another computer.
 - **Light and dark.** It follows the system.
@@ -106,6 +107,19 @@ classic `hyprland.conf`:
 bind = SUPER ALT, M, exec, memez --toggle-popup
 ```
 
+### Ubuntu / Debian
+
+Download `memez_*_amd64.deb` from the release and install it:
+
+```bash
+sudo apt install ./memez_*_amd64.deb
+```
+
+The package installs the `memez` command, a menu entry and the `memez://` link handler. The
+optional tools are listed as recommended packages: `wl-clipboard` and `wtype` (Wayland) or
+`xdotool` (X11) to paste for you, and `tesseract-ocr` with `tesseract-ocr-eng` to read the text in
+memes.
+
 ### Other Linux
 
 ```bash
@@ -169,6 +183,34 @@ Settings → Raycast → **Install** adds two commands. No `npm` and no running 
 If the commands do not show after Install, run Raycast's "Import Extension" command and pick
 `~/.config/raycast/extensions/memez`.
 
+## Vicinae (Linux, macOS and Windows)
+
+The Vicinae extension is a read-only client for the same library. The Memez app owns the library
+and the AI; Vicinae searches what the app already tagged and pastes or copies a meme. Adding from
+the clipboard and recent-use updates go back to the app through `memez://` links, so install and
+run Memez before using those actions.
+
+```bash
+cd vicinae
+npm install
+npm run build
+```
+
+Then open Vicinae and search for **Memez**. For development, run `npm run dev` instead of
+`npm run build` while Vicinae is running.
+
+- **Search Memes.** A grid of your memes, recent first. Enter pastes, Cmd/Ctrl+C copies,
+  Cmd/Ctrl+Y opens the file, Cmd/Ctrl+Shift+V adds the meme on the clipboard, and
+  Cmd/Ctrl+Shift+F shows it in the file browser. It reads the library folder, so it works when
+  Memez is closed. It has no search by meaning.
+- **Add Meme from Clipboard.** Adds the copied image, GIF, video or link through the Memez app.
+
+Set the extension's **Library Folder** preference to the same folder as the app (`~/Memez` by
+default). Video previews use `ffmpeg` on Linux and Windows, and Quick Look on macOS; install
+`ffmpeg` if your video tiles show only a file icon. On Linux, `xdg-open` is needed to send
+`memez://` links to the app. On Wayland the app reads the clipboard with `wl-paste`, so adding
+still works when no Memez window has focus.
+
 ## Omarchy
 
 On [Omarchy](https://omarchy.org), Settings → Omarchy → **Install** adds a meme picker to the
@@ -231,12 +273,15 @@ On Arch, the pacman package needs `libxcrypt-compat` for electron-builder's bund
 
 ```bash
 npm --prefix raycast install   # macOS only, once: the app carries the Raycast extension
+npm --prefix vicinae install   # Vicinae extension dependencies
 npm run build:mac
-npm run build:linux
+npm run build:linux            # AppImage, pacman, deb and tar.gz
+npm run build:deb              # only the Ubuntu/Debian package
 npm run build:win
 ```
 
 To work on the Raycast extension: `cd raycast && npm install && npm run dev`.
+To work on the Vicinae extension: `cd vicinae && npm install && npm run dev`.
 
 ### Release
 
