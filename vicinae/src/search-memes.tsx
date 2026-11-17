@@ -16,16 +16,14 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { readIndex } from '../../src/main/library'
 import { byRecentUse, createSearch } from '../../src/renderer/src/lib/search'
 import { mediaFileName, mediaKind, type Meme } from '../../src/shared/types'
-import { kindSubtitle, memeCount, sectionTitle } from './item'
+// Same grid text and paging as the Raycast extension.
+import { kindSubtitle, memeCount, sectionTitle } from '../../raycast/src/item'
+import { pageAfter } from '../../raycast/src/page'
 import { addFromClipboard, markUsed } from './memez'
-import { pageAfter } from './page'
 import { videoPoster } from './poster'
 
-interface ExtensionPreferences {
-  libraryFolder: string
-}
-
-const root = (getPreferenceValues<ExtensionPreferences>().libraryFolder || '~/Memez').replace(
+// The library folder from the extension preferences. `~` means the home folder.
+const root = (getPreferenceValues<Preferences.SearchMemes>().libraryFolder || '~/Memez').replace(
   /^~(?=$|\/)/,
   homedir()
 )
@@ -241,7 +239,6 @@ function MemeItem({ meme }: { meme: Meme }) {
       content={image ? { source: image } : { fileIcon: path }}
       title={meme.title || 'Untitled'}
       subtitle={kindSubtitle(meme)}
-      keywords={[meme.title, ...meme.tags, meme.ocrText ?? ''].filter(Boolean)}
       actions={
         <ActionPanel>
           <Action title="Paste Meme" icon={Icon.CopyClipboard} onAction={paste} />
